@@ -1,0 +1,38 @@
+# Python
+*.pyc
+*.pyo
+__pycache__/
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Cython
+*.c
+*.so
+*.pyd
+
+# Mac OS X
+.DS_Store
+
+# IDE/editor local state
+.idea/
+.vscode/
+
+# build, dist and egg-info directories
+build/
+dist/
+*.egg-info/
+
+# Local automation/smoke-test output roots
+automation_outputs/
+official_gui_smoke_*/
+
+# Runtime logs
+*.log
+
+# Backup files
+*~
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/

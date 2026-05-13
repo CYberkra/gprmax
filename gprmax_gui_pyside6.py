@@ -192,6 +192,60 @@ PRESETS = {
         "source_resistance": 0.0,
         "source_polarisation": "z",
     },
+    "uav_pipe_gain_workflow_bscan": {
+        "label": "UAV 管线 raw+增益流程 B-scan",
+        "title": "UAV-GPR raw B-scan for background removal and mild gain workflow",
+        "domain_x": 1.200,
+        "domain_y": 0.850,
+        "dx": 0.005,
+        "dy": 0.005,
+        "time_window_ns": 24.0,
+        "host_preset": "dry_soil",
+        "host_name": "dry_soil",
+        "host_eps_r": 9.0,
+        "host_sigma": 0.004,
+        "ground_surface_y": 0.550,
+        "lift_off": 0.150,
+        "source_start_x": 0.100,
+        "receiver_offset": 0.120,
+        "scan_step": 0.010,
+        "n_traces": 90,
+        "center_freq_mhz": 500.0,
+        "target_shape": "cylinder",
+        "target_preset": "pec",
+        "target_name": "pec",
+        "target_eps_r": 0.0,
+        "target_sigma": 0.0,
+        "target_center_x": 0.620,
+        "target_center_y": 0.220,
+        "target_radius": 0.035,
+        "target_width": 0.070,
+        "target_height": 0.070,
+        "target_orientation": "horizontal",
+        "target_angle_deg": 0.0,
+        "background_layers": [
+            {
+                "name": "uav_shallow_dry_soil",
+                "eps_r": 7.5,
+                "sigma": 0.003,
+                "y_min": 0.390,
+                "y_max": 0.460,
+            },
+            {
+                "name": "uav_deeper_moist_soil",
+                "eps_r": 11.0,
+                "sigma": 0.006,
+                "y_min": 0.120,
+                "y_max": 0.180,
+            },
+        ],
+        "write_geometry_view": False,
+        "geometry_only": False,
+        "source_type": "hertzian_dipole",
+        "waveform_type": "ricker",
+        "source_resistance": 0.0,
+        "source_polarisation": "z",
+    },
     "air_void_halfspace": {
         "label": "半空间空气空洞",
         "title": "B-scan from an air void buried in a dielectric half-space",
@@ -671,6 +725,7 @@ class SimulationConfig:
     # 多条裂缝模式（当 target_shape == "crack" 时使用）
     use_multi_cracks: bool = False
     cracks: List[CrackSpec] = field(default_factory=list)
+    background_layers: List[Dict[str, float]] = field(default_factory=list)
 
     source_type: str = "hertzian_dipole"
     waveform_type: str = "ricker"
@@ -805,6 +860,8 @@ class BuildArtifacts:
     primary_out_path: str = ""
     merged_out_path: str = ""
     bscan_png_path: str = ""
+    background_removed_png_path: str = ""
+    background_removed_gain_png_path: str = ""
     geometry_view_path: str = ""
     output_out_paths: List[str] = field(default_factory=list)
 
@@ -1111,6 +1168,24 @@ class PhysicsAuditor(object):
         else:
             report.add("info", "源类型为 Hertzian dipole（理想软源）。")
 
+        for layer in config.background_layers:
+            y_min = float(layer["y_min"])
+            y_max = float(layer["y_max"])
+            if y_min < 0 or y_max > config.ground_surface_y or y_max <= y_min:
+                report.add(
+                    "error",
+                    "背景层 {0} 必须位于地表以下且 y_min < y_max。".format(
+                        layer["name"]
+                    ),
+                )
+        if config.background_layers:
+            report.add(
+                "info",
+                "背景层数量: {0}；用于提供可背景抑制的弱水平反射。".format(
+                    len(config.background_layers)
+                ),
+            )
+
         scan_mid_start = config.source_start_x + 0.5 * config.receiver_offset
         scan_mid_end = config.source_end_x + 0.5 * config.receiver_offset
         if target_x_max < scan_mid_start or target_x_min > scan_mid_end:
@@ -1367,6 +1442,7 @@ class ScenarioBuilder(object):
             lines.append("#rx_steps: {0:.3f} 0 0".format(config.effective_scan_step))
 
         lines.extend(["", self._host_box_line(config)])
+        lines.extend(self._background_layer_lines(config))
         lines.extend(self._target_lines(config))
 
         if config.write_geometry_view:
@@ -1451,9 +1527,11 @@ class ScenarioBuilder(object):
             "effective_scan_step_m": config.effective_scan_step,
             "scan_step_cells": config.scan_step_cells,
             "recommended_velocity_m_per_ns": material_velocity(config.host_eps_r) / 1e9,
+            "uav_lift_off_m": config.lift_off,
+            "background_layers": config.background_layers,
             "simulation_processing_guidance": [
-                "Do not apply dewow or mean-trace removal by default; the simulated data has no instrument drift or real airwave clutter unless explicitly modelled.",
-                "Use gain only for visualization or robustness experiments; keep raw amplitudes for algorithm metrics.",
+                "Keep the primary .out/_merged.out as raw FDTD field data; do not overwrite it with filtered or gained data.",
+                "A realistic processing preview is background removal followed by mild time-varying gain; AGC is optional and can distort relative amplitudes.",
                 "Use f-k migration only when evaluating migration behavior, with velocity from the known host permittivity.",
             ],
         }
@@ -1482,6 +1560,18 @@ class ScenarioBuilder(object):
         )
         ax.add_patch(host_rect)
         ax.add_patch(air_rect)
+
+        for index, layer in enumerate(self._background_layers(config)):
+            layer_rect = Rectangle(
+                (0.0, float(layer["y_min"])),
+                config.domain_x,
+                float(layer["y_max"]) - float(layer["y_min"]),
+                facecolor="#b08968" if index % 2 == 0 else "#a3a380",
+                edgecolor="#6b4f2a",
+                linewidth=0.8,
+                alpha=0.65,
+            )
+            ax.add_patch(layer_rect)
 
         if config.target_shape == "crack":
             crack_segments = config.crack_segments()
@@ -1595,6 +1685,16 @@ class ScenarioBuilder(object):
             builtin=False,
         )
 
+        for layer in self._background_layers(config):
+            name = str(layer["name"])
+            if name not in materials:
+                materials[name] = MaterialSpec(
+                    name=name,
+                    eps_r=float(layer["eps_r"]),
+                    sigma=float(layer["sigma"]),
+                    builtin=False,
+                )
+
         if config.target_name not in ["pec", "free_space"]:
             materials[config.target_name] = MaterialSpec(
                 name=config.target_name,
@@ -1624,6 +1724,38 @@ class ScenarioBuilder(object):
             config.dz,
             config.host_name,
         )
+
+    def _background_layers(self, config: SimulationConfig) -> List[Dict[str, float]]:
+        layers = []
+        for layer in config.background_layers:
+            y_min = float(layer["y_min"])
+            y_max = float(layer["y_max"])
+            if y_max <= y_min:
+                continue
+            layers.append(
+                {
+                    "name": str(layer["name"]),
+                    "eps_r": float(layer["eps_r"]),
+                    "sigma": float(layer["sigma"]),
+                    "y_min": y_min,
+                    "y_max": y_max,
+                }
+            )
+        return layers
+
+    def _background_layer_lines(self, config: SimulationConfig) -> List[str]:
+        lines = []
+        for layer in self._background_layers(config):
+            lines.append(
+                "#box: 0 {0:.3f} 0 {1:.3f} {2:.3f} {3:.3f} {4}".format(
+                    layer["y_min"],
+                    config.domain_x,
+                    layer["y_max"],
+                    config.dz,
+                    layer["name"],
+                )
+            )
+        return lines
 
     def _target_lines(self, config: SimulationConfig) -> List[str]:
         if config.target_shape == "crack":
@@ -1797,8 +1929,45 @@ class GprMaxRunner(object):
         figure = create_bscan_figure(data, dt)
         figure.savefig(bscan_png, dpi=160, bbox_inches="tight")
         artifacts.bscan_png_path = bscan_png
+
+        background_removed = remove_horizontal_background(data)
+        background_removed_png = os.path.join(
+            artifacts.output_dir,
+            "{0}_background_removed.png".format(
+                os.path.splitext(os.path.basename(artifacts.input_path))[0]
+            ),
+        )
+        figure = create_bscan_figure(
+            background_removed,
+            dt,
+            title="背景抑制 Ez B-scan",
+        )
+        figure.savefig(background_removed_png, dpi=160, bbox_inches="tight")
+        artifacts.background_removed_png_path = background_removed_png
+
+        gained = apply_mild_time_gain(background_removed, dt)
+        background_removed_gain_png = os.path.join(
+            artifacts.output_dir,
+            "{0}_background_removed_mild_gain.png".format(
+                os.path.splitext(os.path.basename(artifacts.input_path))[0]
+            ),
+        )
+        figure = create_bscan_figure(
+            gained,
+            dt,
+            title="背景抑制 + 温和时间增益 Ez B-scan",
+        )
+        figure.savefig(background_removed_gain_png, dpi=160, bbox_inches="tight")
+        artifacts.background_removed_gain_png_path = background_removed_gain_png
+
         self._write_manifest(config, artifacts)
         self.log("B-scan 预览已保存到 {0}".format(bscan_png))
+        self.log("背景抑制预览已保存到 {0}".format(background_removed_png))
+        self.log(
+            "背景抑制 + 温和时间增益预览已保存到 {0}".format(
+                background_removed_gain_png
+            )
+        )
         self.log("数据清单已保存到 {0}".format(artifacts.manifest_path))
         return artifacts
 
@@ -2010,11 +2179,15 @@ class GprMaxRunner(object):
             "merged_out_file": artifacts.merged_out_path,
             "raw_out_files": artifacts.output_out_paths,
             "bscan_preview_file": artifacts.bscan_png_path,
+            "background_removed_preview_file": artifacts.background_removed_png_path,
+            "background_removed_mild_gain_preview_file": artifacts.background_removed_gain_png_path,
             "component": "Ez",
             "requested_scan_step_m": config.scan_step,
             "effective_scan_step_m": config.effective_scan_step,
             "scan_step_cells": config.scan_step_cells,
             "recommended_velocity_m_per_ns": material_velocity(config.host_eps_r) / 1e9,
+            "uav_lift_off_m": config.lift_off,
+            "background_layers": config.background_layers,
             "gprmax_notes": ScenarioBuilder()._gprmax_processing_notes(config),
             "primary_out_summary": self._summarise_out_file(artifacts.primary_out_path),
         }
@@ -2030,7 +2203,26 @@ class GprMaxRunner(object):
         return data, dt
 
 
-def create_bscan_figure(data: np.ndarray, dt: float) -> Figure:
+def remove_horizontal_background(data: np.ndarray) -> np.ndarray:
+    if data.ndim == 1:
+        return data - np.mean(data)
+    return data - np.mean(data, axis=1, keepdims=True)
+
+
+def apply_mild_time_gain(data: np.ndarray, dt: float) -> np.ndarray:
+    if data.shape[0] == 0:
+        return data
+    time_ns = np.arange(data.shape[0], dtype=np.float32) * float(dt) * 1e9
+    gain = 1.0 + 0.18 * time_ns
+    gain = np.minimum(gain, 4.0)
+    if data.ndim == 1:
+        return data * gain
+    return data * gain[:, np.newaxis]
+
+
+def create_bscan_figure(
+    data: np.ndarray, dt: float, title: str = "原始 Ez B-scan"
+) -> Figure:
     figure = Figure(figsize=(9, 5.4), dpi=120)
     ax = figure.add_subplot(111)
     vmax = np.percentile(np.abs(data), 99.5)
@@ -2047,7 +2239,7 @@ def create_bscan_figure(data: np.ndarray, dt: float) -> Figure:
     )
     ax.set_xlabel("道号")
     ax.set_ylabel("时间 [ns]")
-    ax.set_title("原始 Ez B-scan")
+    ax.set_title(title)
     ax.grid(True, linestyle=":", linewidth=0.4, alpha=0.4)
     figure.colorbar(image, ax=ax, shrink=0.85, label="场强 [V/m]")
     figure.tight_layout()
@@ -2800,6 +2992,9 @@ class MainWindow(QtWidgets.QMainWindow):
             target_angle_deg=self.target_angle_spin.value(),
             use_curved_crack=self.use_curved_crack_check.isChecked(),
             crack_path_text=self.crack_path_edit.toPlainText().strip(),
+            background_layers=list(
+                PRESETS[self.preset_combo.currentData()].get("background_layers", [])
+            ),
             source_type=self.source_type_combo.currentText(),
             waveform_type=self.waveform_type_combo.currentText(),
             source_resistance=self.source_resistance_spin.value(),
@@ -3064,6 +3259,7 @@ def build_smoke_config(args: argparse.Namespace) -> SimulationConfig:
         target_angle_deg=preset["target_angle_deg"],
         use_curved_crack=bool(preset.get("use_curved_crack", False)),
         crack_path_text=str(preset.get("crack_path_text", "")),
+        background_layers=list(preset.get("background_layers", [])),
         source_type=preset.get("source_type", "hertzian_dipole"),
         waveform_type=preset.get("waveform_type", "ricker"),
         source_resistance=preset.get("source_resistance", 0.0),

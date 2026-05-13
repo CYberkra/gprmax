@@ -28,6 +28,22 @@ dist/
 automation_outputs/
 official_gui_smoke_*/
 
+# Local reports and generated presentation assets
+MATLAB_gprMax_Simulation_Report.pptx
+ppt_images/
+
+# Local GUI package exports
+gprmax_gui_standalone_v2_package/
+gprmax_gui_standalone_v3_package/
+gprmax_gui_standalone_v3_package.zip
+
+# Local generated example outputs; keep tests/ reference outputs trackable
+gprmax_test/
+user_models/*.out
+user_models/*.vti
+user_models/*.vtp
+user_models/*_merged.png
+
 # Runtime logs
 *.log
 

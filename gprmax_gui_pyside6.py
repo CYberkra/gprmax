@@ -154,6 +154,44 @@ PRESETS = {
         "source_resistance": 0.0,
         "source_polarisation": "z",
     },
+    "realistic_pipe_bscan": {
+        "label": "真实感管线 B-scan",
+        "title": "Realistic B-scan with direct wave and buried pipe hyperbola",
+        "domain_x": 1.200,
+        "domain_y": 0.700,
+        "dx": 0.005,
+        "dy": 0.005,
+        "time_window_ns": 18.0,
+        "host_preset": "dry_soil",
+        "host_name": "dry_soil",
+        "host_eps_r": 9.0,
+        "host_sigma": 0.001,
+        "ground_surface_y": 0.520,
+        "lift_off": 0.020,
+        "source_start_x": 0.120,
+        "receiver_offset": 0.100,
+        "scan_step": 0.010,
+        "n_traces": 90,
+        "center_freq_mhz": 500.0,
+        "target_shape": "cylinder",
+        "target_preset": "pec",
+        "target_name": "pec",
+        "target_eps_r": 0.0,
+        "target_sigma": 0.0,
+        "target_center_x": 0.620,
+        "target_center_y": 0.260,
+        "target_radius": 0.030,
+        "target_width": 0.060,
+        "target_height": 0.060,
+        "target_orientation": "horizontal",
+        "target_angle_deg": 0.0,
+        "write_geometry_view": False,
+        "geometry_only": False,
+        "source_type": "hertzian_dipole",
+        "waveform_type": "ricker",
+        "source_resistance": 0.0,
+        "source_polarisation": "z",
+    },
     "air_void_halfspace": {
         "label": "半空间空气空洞",
         "title": "B-scan from an air void buried in a dielectric half-space",
@@ -2985,43 +3023,57 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log_view.appendPlainText("[{0}] {1}".format(timestamp, message))
 
 
-def run_smoke_test(args: argparse.Namespace) -> int:
-    config = SimulationConfig(
-        title=PRESETS["official_cylinder_bscan"]["title"],
+def build_smoke_config(args: argparse.Namespace) -> SimulationConfig:
+    preset_key = getattr(args, "smoke_preset", "official_cylinder_bscan")
+    preset = PRESETS[preset_key]
+    return SimulationConfig(
+        title=preset["title"],
         output_root=args.output_root,
-        output_name="official_gui_smoke",
+        output_name="{0}_smoke".format(preset_key),
         python_executable=args.python or DEFAULT_PYTHON,
         timestamp_output=True,
         use_gpu=args.gpu,
         geometry_fixed=True,
         geometry_only=False,
         write_geometry_view=False,
-        domain_x=0.240,
-        domain_y=0.210,
-        dx=0.002,
-        dy=0.002,
-        time_window_ns=3.0,
-        host_name="half_space",
-        host_eps_r=6.0,
-        host_sigma=0.0,
-        ground_surface_y=0.170,
-        lift_off=0.0,
-        source_start_x=0.040,
-        receiver_offset=0.040,
-        scan_step=0.002,
+        domain_x=preset["domain_x"],
+        domain_y=preset["domain_y"],
+        dx=preset["dx"],
+        dy=preset["dy"],
+        time_window_ns=preset["time_window_ns"],
+        host_name=preset["host_name"],
+        host_eps_r=preset["host_eps_r"],
+        host_sigma=preset["host_sigma"],
+        ground_surface_y=preset["ground_surface_y"],
+        lift_off=preset["lift_off"],
+        source_start_x=preset["source_start_x"],
+        receiver_offset=preset["receiver_offset"],
+        scan_step=preset["scan_step"],
         n_traces=args.traces,
-        center_freq_mhz=1500.0,
-        target_shape="cylinder",
-        target_name="pec",
-        target_eps_r=0.0,
-        target_sigma=0.0,
-        target_center_x=0.120,
-        target_center_y=0.080,
-        target_radius=0.010,
-        target_width=0.020,
-        target_height=0.020,
-        preset_key="official_cylinder_bscan",
+        center_freq_mhz=preset["center_freq_mhz"],
+        target_shape=preset["target_shape"],
+        target_name=preset["target_name"],
+        target_eps_r=preset["target_eps_r"],
+        target_sigma=preset["target_sigma"],
+        target_center_x=preset["target_center_x"],
+        target_center_y=preset["target_center_y"],
+        target_radius=preset["target_radius"],
+        target_width=preset["target_width"],
+        target_height=preset["target_height"],
+        target_orientation=preset["target_orientation"],
+        target_angle_deg=preset["target_angle_deg"],
+        use_curved_crack=bool(preset.get("use_curved_crack", False)),
+        crack_path_text=str(preset.get("crack_path_text", "")),
+        source_type=preset.get("source_type", "hertzian_dipole"),
+        waveform_type=preset.get("waveform_type", "ricker"),
+        source_resistance=preset.get("source_resistance", 0.0),
+        source_polarisation=preset.get("source_polarisation", "z"),
+        preset_key=preset_key,
     )
+
+
+def run_smoke_test(args: argparse.Namespace) -> int:
+    config = build_smoke_config(args)
 
     auditor = PhysicsAuditor()
     report = auditor.build_report(config)
@@ -3036,7 +3088,11 @@ def run_smoke_test(args: argparse.Namespace) -> int:
     expected_input = builder._build_exact_official_text()
     with open(artifacts.input_path, "r", encoding="utf-8") as fobj:
         built_input = fobj.read()
-    if args.traces == 60 and built_input.rstrip() != expected_input.rstrip():
+    if (
+        config.preset_key == "official_cylinder_bscan"
+        and args.traces == 60
+        and built_input.rstrip() != expected_input.rstrip()
+    ):
         print("Official preset input mismatch")
         return 1
 
@@ -3067,7 +3123,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--smoke-test",
         action="store_true",
-        help="build and run the official cylinder preset without opening the GUI",
+        help="build and run a preset without opening the GUI",
+    )
+    parser.add_argument(
+        "--smoke-preset",
+        default="official_cylinder_bscan",
+        choices=sorted(PRESETS.keys()),
+        help="preset key to use with --smoke-test",
     )
     parser.add_argument(
         "--output-root",

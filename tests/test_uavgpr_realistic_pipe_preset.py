@@ -96,18 +96,16 @@ class TestUavGprRealisticPipePreset(unittest.TestCase):
         )
         self.assertEqual(config.lift_off, 0.150)
         self.assertEqual(config.host_sigma, 0.004)
-        self.assertEqual(len(config.background_layers), 2)
+        self.assertEqual(len(config.background_layers), 0)
         self.assertGreater(config.time_window_ns, report.derived["closest_twt_ns"])
 
         input_text = ScenarioBuilder().build_input_text(config)
         self.assertIn("#material: 9 0.004 1 0 dry_soil", input_text)
-        self.assertIn("#material: 7.5 0.003 1 0 uav_shallow_dry_soil", input_text)
-        self.assertIn("#material: 11 0.006 1 0 uav_deeper_moist_soil", input_text)
+        self.assertNotIn("uav_shallow_dry_soil", input_text)
+        self.assertNotIn("uav_deeper_moist_soil", input_text)
         self.assertIn("#hertzian_dipole: z 0.100 0.700 0 my_wave", input_text)
         self.assertIn("#rx: 0.220 0.700 0", input_text)
         self.assertIn("#box: 0 0 0 1.200 0.550 0.005 dry_soil", input_text)
-        self.assertIn("#box: 0 0.390 0 1.200 0.460 0.005 uav_shallow_dry_soil", input_text)
-        self.assertIn("#box: 0 0.120 0 1.200 0.180 0.005 uav_deeper_moist_soil", input_text)
         self.assertIn("#cylinder: 0.620 0.220 0", input_text)
 
     def test_preview_processing_keeps_raw_data_separate(self):

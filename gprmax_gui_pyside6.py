@@ -223,22 +223,6 @@ PRESETS = {
         "target_height": 0.070,
         "target_orientation": "horizontal",
         "target_angle_deg": 0.0,
-        "background_layers": [
-            {
-                "name": "uav_shallow_dry_soil",
-                "eps_r": 7.5,
-                "sigma": 0.003,
-                "y_min": 0.390,
-                "y_max": 0.460,
-            },
-            {
-                "name": "uav_deeper_moist_soil",
-                "eps_r": 11.0,
-                "sigma": 0.006,
-                "y_min": 0.120,
-                "y_max": 0.180,
-            },
-        ],
         "write_geometry_view": False,
         "geometry_only": False,
         "source_type": "hertzian_dipole",

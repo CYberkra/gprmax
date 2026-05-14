@@ -24,6 +24,7 @@ import numpy as np
 from gprmax_gui_pyside6 import PRESETS
 from gprmax_gui_pyside6 import PhysicsAuditor
 from gprmax_gui_pyside6 import ScenarioBuilder
+from gprmax_gui_pyside6 import SimpleTargetSpec
 from gprmax_gui_pyside6 import apply_mild_time_gain
 from gprmax_gui_pyside6 import build_smoke_config
 from gprmax_gui_pyside6 import remove_horizontal_background
@@ -107,6 +108,39 @@ class TestUavGprRealisticPipePreset(unittest.TestCase):
         self.assertIn("#rx: 0.220 0.700 0", input_text)
         self.assertIn("#box: 0 0 0 1.200 0.550 0.005 dry_soil", input_text)
         self.assertIn("#cylinder: 0.620 0.220 0", input_text)
+        notes = ScenarioBuilder()._gprmax_processing_notes(config)
+        self.assertTrue(notes["raw_is_unchanged"])
+        self.assertTrue(notes["preview_processing_only"])
+        self.assertEqual(notes["scan_geometry"]["uav_lift_off_m"], 0.150)
+        self.assertEqual(len(notes["simple_targets"]), 1)
+
+    def test_optional_second_simple_target_is_in_input_and_handoff_notes(self):
+        config = build_smoke_config(
+            self.make_args_for_preset("uav_pipe_gain_workflow_bscan", 12)
+        )
+        config.extra_targets = [
+            SimpleTargetSpec(
+                enabled=True,
+                shape="box",
+                material_name="target_concrete",
+                eps_r=7.0,
+                sigma=0.001,
+                center_x=0.820,
+                center_y=0.260,
+                width=0.060,
+                height=0.040,
+            )
+        ]
+
+        input_text = ScenarioBuilder().build_input_text(config)
+        self.assertIn("#material: 7 0.001 1 0 target_concrete", input_text)
+        self.assertIn("#cylinder: 0.620 0.220 0", input_text)
+        self.assertIn("#box: 0.790 0.240 0 0.850 0.280 0.005 target_concrete", input_text)
+
+        notes = ScenarioBuilder()._gprmax_processing_notes(config)
+        self.assertEqual(len(notes["simple_targets"]), 2)
+        self.assertEqual(notes["simple_targets"][1]["shape"], "box")
+        self.assertEqual(notes["simple_targets"][1]["material_name"], "target_concrete")
 
     def test_preview_processing_keeps_raw_data_separate(self):
         raw = np.array(

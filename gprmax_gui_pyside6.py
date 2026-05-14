@@ -69,6 +69,7 @@ DEFAULT_PYTHON = r"E:\gprMax\gprMax-v.3.1.7\.venv\Scripts\python.exe"
 APP_TITLE = "gprMax 物理建模工作台"
 APP_VERSION = "0.1"
 PROJECT_ROOT = r"E:\gprMax\gprMax-v.3.1.7"
+DEFAULT_MYGPR_ROOT = r"D:\MyGPR"
 CUDA_ROOT = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8"
 VS_ROOT = r"E:\vs2022"
 MSVC_BIN = os.path.join(
@@ -710,6 +711,7 @@ class SimulationConfig:
     use_multi_cracks: bool = False
     cracks: List[CrackSpec] = field(default_factory=list)
     background_layers: List[Dict[str, float]] = field(default_factory=list)
+    extra_targets: List["SimpleTargetSpec"] = field(default_factory=list)
 
     source_type: str = "hertzian_dipole"
     waveform_type: str = "ricker"
@@ -832,6 +834,97 @@ class SimulationConfig:
                 material_name=self.target_name,
             )
         ]
+
+    def simple_targets(self) -> List["SimpleTargetSpec"]:
+        targets = []
+        if self.target_shape in ["cylinder", "box"]:
+            targets.append(
+                SimpleTargetSpec(
+                    enabled=True,
+                    shape=self.target_shape,
+                    material_name=self.target_name,
+                    eps_r=self.target_eps_r,
+                    sigma=self.target_sigma,
+                    center_x=self.target_center_x,
+                    center_y=self.target_center_y,
+                    radius=self.target_radius,
+                    width=self.target_width,
+                    height=self.target_height,
+                )
+            )
+        for target in self.extra_targets:
+            if target.enabled:
+                targets.append(target)
+        return targets
+
+
+@dataclass
+class SimpleTargetSpec:
+    enabled: bool = True
+    shape: str = "cylinder"
+    material_name: str = "pec"
+    eps_r: float = 0.0
+    sigma: float = 0.0
+    center_x: float = 0.0
+    center_y: float = 0.0
+    radius: float = 0.01
+    width: float = 0.02
+    height: float = 0.02
+
+    def input_lines(self, dz: float) -> List[str]:
+        if self.shape == "cylinder":
+            return [
+                "#cylinder: {0:.3f} {1:.3f} 0 {0:.3f} {1:.3f} {2:.3f} {3:.3f} {4}".format(
+                    self.center_x,
+                    self.center_y,
+                    dz,
+                    self.radius,
+                    self.material_name,
+                )
+            ]
+        x1 = self.center_x - 0.5 * self.width
+        x2 = self.center_x + 0.5 * self.width
+        y1 = self.center_y - 0.5 * self.height
+        y2 = self.center_y + 0.5 * self.height
+        return [
+            "#box: {0:.3f} {1:.3f} 0 {2:.3f} {3:.3f} {4:.3f} {5}".format(
+                x1,
+                y1,
+                x2,
+                y2,
+                dz,
+                self.material_name,
+            )
+        ]
+
+    def bounds(self) -> Tuple[float, float, float, float]:
+        if self.shape == "cylinder":
+            return (
+                self.center_x - self.radius,
+                self.center_x + self.radius,
+                self.center_y - self.radius,
+                self.center_y + self.radius,
+            )
+        return (
+            self.center_x - 0.5 * self.width,
+            self.center_x + 0.5 * self.width,
+            self.center_y - 0.5 * self.height,
+            self.center_y + 0.5 * self.height,
+        )
+
+    def to_manifest(self) -> Dict[str, object]:
+        return {
+            "enabled": self.enabled,
+            "shape": self.shape,
+            "material_name": self.material_name,
+            "eps_r": self.eps_r,
+            "sigma": self.sigma,
+            "center_x_m": self.center_x,
+            "center_y_m": self.center_y,
+            "radius_m": self.radius,
+            "width_m": self.width,
+            "height_m": self.height,
+        }
 
 
 @dataclass
@@ -1500,6 +1593,8 @@ class ScenarioBuilder(object):
         )
 
     def _gprmax_processing_notes(self, config: SimulationConfig) -> Dict[str, object]:
+        scan_start_mid_x = config.source_start_x + 0.5 * config.receiver_offset
+        scan_end_mid_x = config.source_end_x + 0.5 * config.receiver_offset
         return {
             "source": "gprMax FDTD simulation",
             "primary_format": "HDF5 .out",
@@ -1507,12 +1602,40 @@ class ScenarioBuilder(object):
             "data_layout": "samples x traces; single A-scan is stored as samples x 1 by GUI readers",
             "dt_units": "seconds",
             "position_units": "meters",
+            "raw_is_unchanged": True,
+            "preview_processing_only": True,
             "requested_scan_step_m": config.scan_step,
             "effective_scan_step_m": config.effective_scan_step,
             "scan_step_cells": config.scan_step_cells,
             "recommended_velocity_m_per_ns": material_velocity(config.host_eps_r) / 1e9,
             "uav_lift_off_m": config.lift_off,
             "background_layers": config.background_layers,
+            "simple_targets": [
+                target.to_manifest() for target in config.simple_targets()
+            ],
+            "scan_geometry": {
+                "source_start_x_m": config.source_start_x,
+                "source_end_x_m": config.source_end_x,
+                "receiver_start_x_m": config.receiver_start_x,
+                "receiver_end_x_m": config.receiver_end_x,
+                "receiver_offset_m": config.receiver_offset,
+                "requested_scan_step_m": config.scan_step,
+                "effective_scan_step_m": config.effective_scan_step,
+                "scan_step_cells": config.scan_step_cells,
+                "n_traces": config.n_traces,
+                "ground_surface_y_m": config.ground_surface_y,
+                "uav_lift_off_m": config.lift_off,
+                "scan_start_mid_x_m": scan_start_mid_x,
+                "scan_end_mid_x_m": scan_end_mid_x,
+                "scan_mid_x_m": 0.5 * (scan_start_mid_x + scan_end_mid_x),
+            },
+            "medium": {
+                "host_name": config.host_name,
+                "host_eps_r": config.host_eps_r,
+                "host_sigma": config.host_sigma,
+                "recommended_velocity_m_per_ns": material_velocity(config.host_eps_r)
+                / 1e9,
+            },
             "simulation_processing_guidance": [
                 "Keep the primary .out/_merged.out as raw FDTD field data; do not overwrite it with filtered or gained data.",
                 "A realistic processing preview is background removal followed by mild time-varying gain; AGC is optional and can distort relative amplitudes.",
@@ -1613,6 +1736,10 @@ class ScenarioBuilder(object):
             )
             ax.add_patch(target_patch)
 
+        for target in config.extra_targets:
+            if target.enabled:
+                self._add_simple_target_patch(ax, target)
+
         pml_x = 10 * config.dx
         pml_y = 10 * config.dy
         safe_rect = Rectangle(
@@ -1659,6 +1786,31 @@ class ScenarioBuilder(object):
         figure.tight_layout()
         return figure
 
+    def _add_simple_target_patch(self, ax, target: SimpleTargetSpec) -> None:
+        if target.shape == "cylinder":
+            patch = Circle(
+                (target.center_x, target.center_y),
+                radius=target.radius,
+                facecolor="#f97316" if target.material_name == "pec" else "#38bdf8",
+                edgecolor="#0b1220",
+                linewidth=1.2,
+                alpha=0.85,
+            )
+        else:
+            patch = Rectangle(
+                (
+                    target.center_x - 0.5 * target.width,
+                    target.center_y - 0.5 * target.height,
+                ),
+                target.width,
+                target.height,
+                facecolor="#f97316" if target.material_name == "pec" else "#38bdf8",
+                edgecolor="#0b1220",
+                linewidth=1.2,
+                alpha=0.85,
+            )
+        ax.add_patch(patch)
+
     def _custom_materials(self, config: SimulationConfig) -> List[MaterialSpec]:
         materials: Dict[str, MaterialSpec] = {}
 
@@ -1698,6 +1850,19 @@ class ScenarioBuilder(object):
                         sigma=config.target_sigma,
                         builtin=False,
                     )
+
+        for target in config.extra_targets:
+            if not target.enabled:
+                continue
+            if target.material_name in ["pec", "free_space"]:
+                continue
+            if target.material_name not in materials:
+                materials[target.material_name] = MaterialSpec(
+                    name=target.material_name,
+                    eps_r=target.eps_r,
+                    sigma=target.sigma,
+                    builtin=False,
+                )
 
         return list(materials.values())
 
@@ -1742,14 +1907,12 @@ class ScenarioBuilder(object):
         return lines
 
     def _target_lines(self, config: SimulationConfig) -> List[str]:
+        lines = []
         if config.target_shape == "crack":
-            lines = []
             for crack in config.crack_segments():
                 lines.extend(crack.input_lines(config.dz, {}))
-            return lines
-
-        if config.target_shape == "cylinder":
-            return [
+        elif config.target_shape == "cylinder":
+            lines.append(
                 "#cylinder: {0:.3f} {1:.3f} 0 {0:.3f} {1:.3f} {2:.3f} {3:.3f} {4}".format(
                     config.target_center_x,
                     config.target_center_y,
@@ -1757,21 +1920,27 @@ class ScenarioBuilder(object):
                     config.target_radius,
                     config.target_name,
                 )
-            ]
-        x1 = config.target_center_x - 0.5 * config.target_size_x
-        x2 = config.target_center_x + 0.5 * config.target_size_x
-        y1 = config.target_center_y - 0.5 * config.target_size_y
-        y2 = config.target_center_y + 0.5 * config.target_size_y
-        return [
-            "#box: {0:.3f} {1:.3f} 0 {2:.3f} {3:.3f} {4:.3f} {5}".format(
-                x1,
-                y1,
-                x2,
-                y2,
-                config.dz,
-                config.target_name,
             )
-        ]
+        else:
+            x1 = config.target_center_x - 0.5 * config.target_size_x
+            x2 = config.target_center_x + 0.5 * config.target_size_x
+            y1 = config.target_center_y - 0.5 * config.target_size_y
+            y2 = config.target_center_y + 0.5 * config.target_size_y
+            lines.append(
+                "#box: {0:.3f} {1:.3f} 0 {2:.3f} {3:.3f} {4:.3f} {5}".format(
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    config.dz,
+                    config.target_name,
+                )
+            )
+
+        for target in config.extra_targets:
+            if target.enabled:
+                lines.extend(target.input_lines(config.dz))
+        return lines
 
     def _make_output_dir(self, config: SimulationConfig) -> str:
         if config.timestamp_output:
@@ -2153,6 +2322,8 @@ class GprMaxRunner(object):
         if not artifacts.manifest_path:
             return
 
+        scan_start_mid_x = config.source_start_x + 0.5 * config.receiver_offset
+        scan_end_mid_x = config.source_end_x + 0.5 * config.receiver_offset
         manifest = {
             "created_at": datetime.now().isoformat(),
             "app": "{0} {1}".format(APP_TITLE, APP_VERSION),
@@ -2172,6 +2343,34 @@ class GprMaxRunner(object):
             "recommended_velocity_m_per_ns": material_velocity(config.host_eps_r) / 1e9,
             "uav_lift_off_m": config.lift_off,
             "background_layers": config.background_layers,
+            "raw_is_unchanged": True,
+            "preview_processing_only": True,
+            "simple_targets": [
+                target.to_manifest() for target in config.simple_targets()
+            ],
+            "scan_geometry": {
+                "source_start_x_m": config.source_start_x,
+                "source_end_x_m": config.source_end_x,
+                "receiver_start_x_m": config.receiver_start_x,
+                "receiver_end_x_m": config.receiver_end_x,
+                "receiver_offset_m": config.receiver_offset,
+                "requested_scan_step_m": config.scan_step,
+                "effective_scan_step_m": config.effective_scan_step,
+                "scan_step_cells": config.scan_step_cells,
+                "n_traces": config.n_traces,
+                "ground_surface_y_m": config.ground_surface_y,
+                "uav_lift_off_m": config.lift_off,
+                "scan_start_mid_x_m": scan_start_mid_x,
+                "scan_end_mid_x_m": scan_end_mid_x,
+                "scan_mid_x_m": 0.5 * (scan_start_mid_x + scan_end_mid_x),
+            },
+            "medium": {
+                "host_name": config.host_name,
+                "host_eps_r": config.host_eps_r,
+                "host_sigma": config.host_sigma,
+                "recommended_velocity_m_per_ns": material_velocity(config.host_eps_r)
+                / 1e9,
+            },
             "gprmax_notes": ScenarioBuilder()._gprmax_processing_notes(config),
             "primary_out_summary": self._summarise_out_file(artifacts.primary_out_path),
         }
@@ -2304,13 +2503,44 @@ class RunnerThread(QtCore.QThread):
             self.failure.emit(traceback.format_exc())
 
 
+class ProcessingReportThread(QtCore.QThread):
+    log_message = QtCore.Signal(str)
+    success = QtCore.Signal(object)
+    failure = QtCore.Signal(str)
+
+    def __init__(
+        self,
+        manifest_path: str,
+        mygpr_root: str,
+        parent: Optional[QtCore.QObject] = None,
+    ):
+        super(ProcessingReportThread, self).__init__(parent)
+        self.manifest_path = manifest_path
+        self.mygpr_root = mygpr_root
+
+    def run(self) -> None:
+        try:
+            from uavgpr_processing_report import run_processing_report
+
+            summary = run_processing_report(
+                self.manifest_path,
+                mygpr_root=self.mygpr_root,
+                log_callback=self.log_message.emit,
+            )
+            self.success.emit(summary)
+        except Exception:
+            self.failure.emit(traceback.format_exc())
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super(MainWindow, self).__init__()
         self.setWindowTitle("{0} {1}".format(APP_TITLE, APP_VERSION))
         self.resize(1600, 980)
         self.worker = None
+        self.processing_worker = None
         self.current_artifacts = None
+        self.current_processing_report_path = ""
         self.current_bscan_data = None
         self.current_bscan_dt = None
         self.builder = ScenarioBuilder()
@@ -2406,6 +2636,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_source_group(left_layout)
         self._build_target_group(left_layout)
         self._build_runtime_group(left_layout)
+        self._build_processing_group(left_layout)
         left_layout.addStretch(1)
 
         right_widget = QtWidgets.QWidget()
@@ -2667,8 +2898,44 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow("宽度 (m)", self.target_width_spin)
         form.addRow("高度 (m)", self.target_height_spin)
         form.addRow("", self.target_hint_label)
+
+        self.target2_enabled_check = QtWidgets.QCheckBox("启用第二异常体")
+        self.target2_enabled_check.toggled.connect(self._update_target2_controls)
+        self.target2_shape_combo = QtWidgets.QComboBox()
+        self.target2_shape_combo.addItems(["cylinder", "box"])
+        self.target2_shape_combo.currentIndexChanged.connect(
+            self._update_target2_controls
+        )
+        self.target2_preset_combo = QtWidgets.QComboBox()
+        for key in TARGET_PRESETS:
+            self.target2_preset_combo.addItem(key, key)
+        self.target2_preset_combo.currentIndexChanged.connect(
+            self._on_target2_preset_changed
+        )
+        self.target2_name_edit = QtWidgets.QLineEdit("pec")
+        self.target2_eps_spin = self._double_spin(1.0, 100.0, 9.0, 3, 0.1)
+        self.target2_sigma_spin = self._double_spin(0.0, 10.0, 0.0, 6, 0.0001)
+        self.target2_center_x_spin = self._double_spin(0.0, 20.0, 0.820, 3, 0.001)
+        self.target2_center_y_spin = self._double_spin(0.0, 20.0, 0.260, 3, 0.001)
+        self.target2_radius_spin = self._double_spin(0.001, 5.0, 0.020, 3, 0.001)
+        self.target2_width_spin = self._double_spin(0.001, 10.0, 0.040, 3, 0.001)
+        self.target2_height_spin = self._double_spin(0.001, 10.0, 0.040, 3, 0.001)
+
+        form.addRow(self._hline())
+        form.addRow("", self.target2_enabled_check)
+        form.addRow("第二目标形状", self.target2_shape_combo)
+        form.addRow("第二目标预设", self.target2_preset_combo)
+        form.addRow("第二目标名称", self.target2_name_edit)
+        form.addRow("第二目标 eps_r", self.target2_eps_spin)
+        form.addRow("第二目标 sigma (S/m)", self.target2_sigma_spin)
+        form.addRow("第二目标中心 x (m)", self.target2_center_x_spin)
+        form.addRow("第二目标中心 y (m)", self.target2_center_y_spin)
+        form.addRow("第二目标半径 (m)", self.target2_radius_spin)
+        form.addRow("第二目标宽度 (m)", self.target2_width_spin)
+        form.addRow("第二目标高度 (m)", self.target2_height_spin)
         layout.addWidget(group)
         self._update_target_controls()
+        self._update_target2_controls()
 
     def _build_runtime_group(self, layout: QtWidgets.QVBoxLayout) -> None:
         group = QtWidgets.QGroupBox("运行设置")
@@ -2722,6 +2989,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self.target_height_spin,
             self.target_angle_spin,
             self.crack_path_edit,
+            self.target2_enabled_check,
+            self.target2_shape_combo,
+            self.target2_preset_combo,
+            self.target2_name_edit,
+            self.target2_eps_spin,
+            self.target2_sigma_spin,
+            self.target2_center_x_spin,
+            self.target2_center_y_spin,
+            self.target2_radius_spin,
+            self.target2_width_spin,
+            self.target2_height_spin,
             self.python_edit,
             self.use_gpu_check,
             self.geometry_fixed_check,
@@ -2735,6 +3013,34 @@ class MainWindow(QtWidgets.QMainWindow):
         ]
         for widget in widgets:
             self._bind_refresh(widget)
+
+    def _build_processing_group(self, layout: QtWidgets.QVBoxLayout) -> None:
+        group = QtWidgets.QGroupBox("MyGPR 处理报告")
+        form = QtWidgets.QFormLayout(group)
+        self.mygpr_root_edit = QtWidgets.QLineEdit(DEFAULT_MYGPR_ROOT)
+        browse = QtWidgets.QPushButton("浏览")
+        browse.clicked.connect(self.on_browse_mygpr_root)
+        browse_row = QtWidgets.QHBoxLayout()
+        browse_row.addWidget(self.mygpr_root_edit)
+        browse_row.addWidget(browse)
+        form.addRow("MyGPR 根目录", self._wrap_layout(browse_row))
+
+        self.processing_report_button = QtWidgets.QPushButton("生成 HTML 报告")
+        self.processing_report_button.setEnabled(False)
+        self.processing_report_button.clicked.connect(self.on_run_processing_report)
+        self.open_report_button = QtWidgets.QPushButton("打开 HTML 报告")
+        self.open_report_button.setEnabled(False)
+        self.open_report_button.clicked.connect(self.on_open_processing_report)
+        button_row = QtWidgets.QHBoxLayout()
+        button_row.addWidget(self.processing_report_button)
+        button_row.addWidget(self.open_report_button)
+        form.addRow("", self._wrap_layout(button_row))
+
+        self.processing_report_label = QtWidgets.QLabel("先运行仿真生成 manifest。")
+        self.processing_report_label.setWordWrap(True)
+        self.processing_report_label.setStyleSheet("color:#94a3b8;")
+        form.addRow("", self.processing_report_label)
+        layout.addWidget(group)
 
     def _bind_refresh(self, widget: QtWidgets.QWidget) -> None:
         if isinstance(widget, QtWidgets.QLineEdit):
@@ -2795,6 +3101,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self.target_eps_spin.setValue(float(preset["eps_r"]))
             self.target_sigma_spin.setValue(float(preset["sigma"]))
 
+    def _on_target2_preset_changed(self) -> None:
+        preset_key = self.target2_preset_combo.currentData()
+        preset = TARGET_PRESETS[preset_key]
+        self.target2_name_edit.setText(preset["name"])
+        builtin = preset["builtin"]
+        self.target2_eps_spin.setEnabled(not builtin)
+        self.target2_sigma_spin.setEnabled(not builtin)
+        if not builtin:
+            self.target2_eps_spin.setValue(float(preset["eps_r"]))
+            self.target2_sigma_spin.setValue(float(preset["sigma"]))
+
     def _update_target_controls(self) -> None:
         is_cylinder = self.target_shape_combo.currentText() == "cylinder"
         is_crack = self.target_shape_combo.currentText() == "crack"
@@ -2841,6 +3158,28 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.target_hint_label.setText("盒子模式：设置宽度、高度和中心坐标。")
             self.target_hint_label.setVisible(True)
+
+    def _update_target2_controls(self) -> None:
+        enabled = self.target2_enabled_check.isChecked()
+        is_cylinder = self.target2_shape_combo.currentText() == "cylinder"
+        target2_widgets = [
+            self.target2_shape_combo,
+            self.target2_preset_combo,
+            self.target2_name_edit,
+            self.target2_center_x_spin,
+            self.target2_center_y_spin,
+            self.target2_radius_spin,
+            self.target2_width_spin,
+            self.target2_height_spin,
+        ]
+        for widget in target2_widgets:
+            widget.setEnabled(enabled)
+        builtin = TARGET_PRESETS[self.target2_preset_combo.currentData()]["builtin"]
+        self.target2_eps_spin.setEnabled(enabled and not builtin)
+        self.target2_sigma_spin.setEnabled(enabled and not builtin)
+        self.target2_radius_spin.setEnabled(enabled and is_cylinder)
+        self.target2_width_spin.setEnabled(enabled and not is_cylinder)
+        self.target2_height_spin.setEnabled(enabled and not is_cylinder)
 
     def apply_preset(self, preset_key: str) -> None:
         if not preset_key or preset_key not in PRESETS:
@@ -2897,7 +3236,23 @@ class MainWindow(QtWidgets.QMainWindow):
             preset.get("source_polarisation", "z")
         )
         self.source_resistance_spin.setValue(preset.get("source_resistance", 0.0))
+        self.target2_enabled_check.setChecked(False)
+        self.target2_shape_combo.setCurrentText("cylinder")
+        self.target2_preset_combo.setCurrentIndex(
+            self.target2_preset_combo.findData("pec")
+        )
+        self.target2_name_edit.setText("pec")
+        self.target2_eps_spin.setValue(9.0)
+        self.target2_sigma_spin.setValue(0.0)
+        self.target2_center_x_spin.setValue(
+            min(preset["domain_x"] - 0.120, preset["target_center_x"] + 0.200)
+        )
+        self.target2_center_y_spin.setValue(preset["target_center_y"])
+        self.target2_radius_spin.setValue(max(0.010, preset["target_radius"] * 0.7))
+        self.target2_width_spin.setValue(max(0.020, preset["target_width"] * 0.7))
+        self.target2_height_spin.setValue(max(0.020, preset["target_height"] * 0.7))
         self._update_target_controls()
+        self._update_target2_controls()
         self._update_source_controls()
         self.schedule_refresh()
 
@@ -2938,6 +3293,28 @@ class MainWindow(QtWidgets.QMainWindow):
         target_builtin = TARGET_PRESETS[target_preset]["builtin"]
         target_eps = 0.0 if target_builtin else self.target_eps_spin.value()
         target_sigma = 0.0 if target_builtin else self.target_sigma_spin.value()
+        extra_targets = []
+        if self.target2_enabled_check.isChecked():
+            target2_preset = self.target2_preset_combo.currentData()
+            target2_builtin = TARGET_PRESETS[target2_preset]["builtin"]
+            target2_eps = 0.0 if target2_builtin else self.target2_eps_spin.value()
+            target2_sigma = (
+                0.0 if target2_builtin else self.target2_sigma_spin.value()
+            )
+            extra_targets.append(
+                SimpleTargetSpec(
+                    enabled=True,
+                    shape=self.target2_shape_combo.currentText(),
+                    material_name=self.target2_name_edit.text().strip() or "pec",
+                    eps_r=target2_eps,
+                    sigma=target2_sigma,
+                    center_x=self.target2_center_x_spin.value(),
+                    center_y=self.target2_center_y_spin.value(),
+                    radius=self.target2_radius_spin.value(),
+                    width=self.target2_width_spin.value(),
+                    height=self.target2_height_spin.value(),
+                )
+            )
         return SimulationConfig(
             title=PRESETS[self.preset_combo.currentData()]["title"],
             output_root=self.output_root_edit.text().strip(),
@@ -2979,6 +3356,7 @@ class MainWindow(QtWidgets.QMainWindow):
             background_layers=list(
                 PRESETS[self.preset_combo.currentData()].get("background_layers", [])
             ),
+            extra_targets=extra_targets,
             source_type=self.source_type_combo.currentText(),
             waveform_type=self.waveform_type_combo.currentText(),
             source_resistance=self.source_resistance_spin.value(),
@@ -3050,6 +3428,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.log("主输出 .out: {0}".format(artifacts.primary_out_path))
         if artifacts.manifest_path and os.path.exists(artifacts.manifest_path):
             self.log("数据清单: {0}".format(artifacts.manifest_path))
+            self.processing_report_button.setEnabled(bool(artifacts.primary_out_path))
+            self.processing_report_label.setText(
+                "可基于当前 manifest 生成 MyGPR HTML 处理报告。"
+            )
         self.open_result_button.setEnabled(True)
 
     def on_failure(self, trace: str) -> None:
@@ -3064,6 +3446,79 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if directory:
             self.output_root_edit.setText(directory)
+
+    def on_browse_mygpr_root(self) -> None:
+        directory = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "选择 MyGPR 根目录", self.mygpr_root_edit.text()
+        )
+        if directory:
+            self.mygpr_root_edit.setText(directory)
+
+    def on_run_processing_report(self) -> None:
+        if self.processing_worker is not None and self.processing_worker.isRunning():
+            QtWidgets.QMessageBox.warning(self, "忙碌", "处理报告正在生成。")
+            return
+
+        manifest_path = ""
+        if self.current_artifacts is not None:
+            manifest_path = self.current_artifacts.manifest_path
+        if not manifest_path or not os.path.exists(manifest_path):
+            manifest_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self,
+                "选择 UavGPR manifest",
+                self.output_root_edit.text(),
+                "JSON 文件 (*.json)",
+            )
+        if not manifest_path:
+            return
+
+        self.current_processing_report_path = ""
+        self.open_report_button.setEnabled(False)
+        self.processing_report_button.setEnabled(False)
+        self.status_label.setText("生成 MyGPR 处理报告...")
+        self.log("处理报告 manifest: {0}".format(manifest_path))
+        self.processing_worker = ProcessingReportThread(
+            manifest_path=manifest_path,
+            mygpr_root=self.mygpr_root_edit.text().strip() or DEFAULT_MYGPR_ROOT,
+            parent=self,
+        )
+        self.processing_worker.log_message.connect(self.log)
+        self.processing_worker.success.connect(self.on_processing_report_success)
+        self.processing_worker.failure.connect(self.on_processing_report_failure)
+        self.processing_worker.start()
+
+    def on_processing_report_success(self, summary: Dict[str, object]) -> None:
+        report_html = str(summary.get("report_html", ""))
+        self.current_processing_report_path = report_html
+        self.status_label.setText("处理报告完成")
+        self.processing_report_button.setEnabled(True)
+        self.open_report_button.setEnabled(bool(report_html and os.path.exists(report_html)))
+        self.processing_report_label.setText(report_html or "处理报告已生成。")
+        recommended = summary.get("recommended") or {}
+        if isinstance(recommended, dict):
+            self.log(
+                "推荐处理组合: {0}".format(
+                    recommended.get("candidate_id", "未生成推荐")
+                )
+            )
+        self.log("HTML 报告: {0}".format(report_html))
+
+    def on_processing_report_failure(self, trace: str) -> None:
+        self.status_label.setText("处理报告失败")
+        self.processing_report_button.setEnabled(True)
+        self.log(trace)
+        QtWidgets.QMessageBox.critical(self, "处理报告失败", trace[:4000])
+
+    def on_open_processing_report(self) -> None:
+        target = self.current_processing_report_path
+        if target and os.path.exists(target):
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(target))
+        else:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "报告不存在",
+                "当前没有可打开的 HTML 报告。",
+            )
 
     def on_save_preset(self) -> None:
         config = self.read_config()
@@ -3193,7 +3648,36 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         if "source_resistance" in data:
             self.source_resistance_spin.setValue(float(data["source_resistance"]))
+        extra_targets = data.get("extra_targets", [])
+        if isinstance(extra_targets, list) and extra_targets:
+            target = extra_targets[0]
+            if isinstance(target, dict):
+                self.target2_enabled_check.setChecked(bool(target.get("enabled", True)))
+                self.target2_shape_combo.setCurrentText(
+                    str(target.get("shape", "cylinder"))
+                )
+                self.target2_name_edit.setText(str(target.get("material_name", "pec")))
+                self.target2_eps_spin.setValue(float(target.get("eps_r", 9.0)))
+                self.target2_sigma_spin.setValue(float(target.get("sigma", 0.0)))
+                self.target2_center_x_spin.setValue(
+                    float(target.get("center_x", target.get("center_x_m", 0.820)))
+                )
+                self.target2_center_y_spin.setValue(
+                    float(target.get("center_y", target.get("center_y_m", 0.260)))
+                )
+                self.target2_radius_spin.setValue(
+                    float(target.get("radius", target.get("radius_m", 0.020)))
+                )
+                self.target2_width_spin.setValue(
+                    float(target.get("width", target.get("width_m", 0.040)))
+                )
+                self.target2_height_spin.setValue(
+                    float(target.get("height", target.get("height_m", 0.040)))
+                )
+        else:
+            self.target2_enabled_check.setChecked(False)
         self._update_target_controls()
+        self._update_target2_controls()
         self._update_source_controls()
         self.schedule_refresh()
 

@@ -2543,12 +2543,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_processing_report_path = ""
         self.current_bscan_data = None
         self.current_bscan_dt = None
+        self.advanced_widgets = []
         self.builder = ScenarioBuilder()
         self.auditor = PhysicsAuditor()
 
         self._apply_theme()
         self._build_ui()
-        self.apply_preset("official_cylinder_bscan")
+        self.apply_preset("uav_pipe_gain_workflow_bscan")
 
     def _apply_theme(self) -> None:
         palette = QtGui.QPalette()
@@ -2592,7 +2593,7 @@ class MainWindow(QtWidgets.QMainWindow):
         header = QtWidgets.QHBoxLayout()
         title = QtWidgets.QLabel(APP_TITLE)
         title.setObjectName("titleLabel")
-        subtitle = QtWidgets.QLabel("基于手册的 2D 建模工作台")
+        subtitle = QtWidgets.QLabel("UavGPR 正演与 MyGPR 验证数据生成")
         subtitle.setObjectName("subTitleLabel")
         title_box = QtWidgets.QVBoxLayout()
         title_box.addWidget(title)
@@ -2606,6 +2607,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.preset_combo.currentIndexChanged.connect(self._on_preset_changed)
         header.addWidget(QtWidgets.QLabel("预设"))
         header.addWidget(self.preset_combo)
+
+        self.advanced_options_check = QtWidgets.QCheckBox("高级参数")
+        self.advanced_options_check.setToolTip(
+            "显示网格、源波形、Python 路径和几何调试等低频设置。"
+        )
+        self.advanced_options_check.toggled.connect(
+            self._set_advanced_options_visible
+        )
+        header.addWidget(self.advanced_options_check)
 
         self.build_button = QtWidgets.QPushButton("生成输入文件")
         self.build_button.clicked.connect(self.on_build_only)
@@ -2696,6 +2706,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.refresh_timer.setSingleShot(True)
         self.refresh_timer.setInterval(200)
         self.refresh_timer.timeout.connect(self.refresh_preview_and_audit)
+        self._set_advanced_options_visible(False)
 
     def _build_output_group(self, layout: QtWidgets.QVBoxLayout) -> None:
         group = QtWidgets.QGroupBox("输出")
@@ -2732,6 +2743,13 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow("离地高度 Lift-off (m)", self.lift_off_spin)
         form.addRow("时间窗 (ns)", self.time_window_spin)
         layout.addWidget(group)
+        self._register_advanced_widgets(
+            self.domain_x_spin,
+            self.domain_y_spin,
+            self.dx_spin,
+            self.dy_spin,
+            self.time_window_spin,
+        )
 
     def _build_material_group(self, layout: QtWidgets.QVBoxLayout) -> None:
         group = QtWidgets.QGroupBox("材料")
@@ -2765,6 +2783,12 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow("目标 eps_r", self.target_eps_spin)
         form.addRow("目标 sigma (S/m)", self.target_sigma_spin)
         layout.addWidget(group)
+        self._register_advanced_widgets(
+            self.host_name_edit,
+            self.target_name_edit,
+            self.target_eps_spin,
+            self.target_sigma_spin,
+        )
 
     def _build_survey_group(self, layout: QtWidgets.QVBoxLayout) -> None:
         group = QtWidgets.QGroupBox("测线参数")
@@ -2785,6 +2809,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_source_group(self, layout: QtWidgets.QVBoxLayout) -> None:
         group = QtWidgets.QGroupBox("源与波形")
+        self.source_group = group
         form = QtWidgets.QFormLayout(group)
 
         self.source_type_combo = QtWidgets.QComboBox()
@@ -2830,6 +2855,7 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow("", self.source_hint_label)
 
         layout.addWidget(group)
+        self._register_advanced_widgets(group)
         self._update_source_controls()
 
     def _update_source_controls(self) -> None:
@@ -2898,6 +2924,13 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow("宽度 (m)", self.target_width_spin)
         form.addRow("高度 (m)", self.target_height_spin)
         form.addRow("", self.target_hint_label)
+        self._register_advanced_widgets(
+            self.use_curved_crack_check,
+            self.target_orientation_combo,
+            self.target_angle_spin,
+            self.crack_path_edit,
+            self.curved_crack_example_button,
+        )
 
         self.target2_enabled_check = QtWidgets.QCheckBox("启用第二异常体")
         self.target2_enabled_check.toggled.connect(self._update_target2_controls)
@@ -2955,6 +2988,12 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow("", self.geometry_only_check)
         form.addRow("", self.write_geometry_check)
         layout.addWidget(group)
+        self._register_advanced_widgets(
+            self.python_edit,
+            self.geometry_fixed_check,
+            self.geometry_only_check,
+            self.write_geometry_check,
+        )
 
         widgets = [
             self.output_root_edit,
@@ -3042,6 +3081,24 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow("", self.processing_report_label)
         layout.addWidget(group)
 
+    def _register_advanced_widgets(self, *widgets: QtWidgets.QWidget) -> None:
+        self.advanced_widgets.extend(widgets)
+
+    def _set_advanced_options_visible(self, visible: bool) -> None:
+        for widget in getattr(self, "advanced_widgets", []):
+            widget.setVisible(visible)
+            parent = widget.parent()
+            if isinstance(parent, QtWidgets.QGroupBox):
+                layout = parent.layout()
+                if isinstance(layout, QtWidgets.QFormLayout):
+                    label = layout.labelForField(widget)
+                    if label is not None:
+                        label.setVisible(visible)
+        if hasattr(self, "target_shape_combo"):
+            self._update_target_controls()
+        if hasattr(self, "target2_enabled_check"):
+            self._update_target2_controls()
+
     def _bind_refresh(self, widget: QtWidgets.QWidget) -> None:
         if isinstance(widget, QtWidgets.QLineEdit):
             widget.textChanged.connect(self.schedule_refresh)
@@ -3113,6 +3170,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.target2_sigma_spin.setValue(float(preset["sigma"]))
 
     def _update_target_controls(self) -> None:
+        advanced_visible = bool(
+            getattr(self, "advanced_options_check", None) is not None
+            and self.advanced_options_check.isChecked()
+        )
         is_cylinder = self.target_shape_combo.currentText() == "cylinder"
         is_crack = self.target_shape_combo.currentText() == "crack"
         is_curved_crack = is_crack and self.use_curved_crack_check.isChecked()
@@ -3128,19 +3189,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self.target_width_spin.setEnabled(not is_cylinder and not is_curved_crack)
         self.target_height_spin.setEnabled(not is_cylinder)
         self.target_orientation_combo.setEnabled(is_crack and not is_curved_crack)
+        self.target_orientation_combo.setVisible(is_crack and advanced_visible)
+        orientation_label = self.target_form.labelForField(
+            self.target_orientation_combo
+        )
+        if orientation_label is not None:
+            orientation_label.setVisible(is_crack and advanced_visible)
 
         self.target_angle_spin.setEnabled(is_angled_crack)
-        self.target_angle_spin.setVisible(is_angled_crack)
+        self.target_angle_spin.setVisible(is_angled_crack and advanced_visible)
         angle_label = self.target_form.labelForField(self.target_angle_spin)
         if angle_label is not None:
-            angle_label.setVisible(is_angled_crack)
+            angle_label.setVisible(is_angled_crack and advanced_visible)
 
-        self.use_curved_crack_check.setVisible(is_crack)
+        self.use_curved_crack_check.setVisible(is_crack and advanced_visible)
         path_label = self.target_form.labelForField(self.crack_path_edit)
         if path_label is not None:
-            path_label.setVisible(is_curved_crack)
-        self.crack_path_edit.setVisible(is_curved_crack)
-        self.curved_crack_example_button.setVisible(is_curved_crack)
+            path_label.setVisible(is_curved_crack and advanced_visible)
+        self.crack_path_edit.setVisible(is_curved_crack and advanced_visible)
+        self.curved_crack_example_button.setVisible(
+            is_curved_crack and advanced_visible
+        )
 
         if is_cylinder:
             self.target_hint_label.setText("圆柱体模式：设置半径和中心坐标。")
@@ -3191,7 +3260,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self.preset_combo.setCurrentIndex(index)
         self.preset_combo.blockSignals(False)
 
-        self.output_name_edit.setText("gpr_model")
+        output_name = (
+            "uavgpr_baseline"
+            if preset_key == "uav_pipe_gain_workflow_bscan"
+            else "gpr_model"
+        )
+        self.output_name_edit.setText(output_name)
         self.domain_x_spin.setValue(preset["domain_x"])
         self.domain_y_spin.setValue(preset["domain_y"])
         self.dx_spin.setValue(preset["dx"])

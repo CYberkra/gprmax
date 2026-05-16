@@ -2686,6 +2686,30 @@ class ProcessingReportThread(QtCore.QThread):
             self.failure.emit(traceback.format_exc())
 
 
+class ValidationThread(QtCore.QThread):
+    success = QtCore.Signal(object)
+    failure = QtCore.Signal(str)
+
+    def __init__(
+        self,
+        output_dir: str,
+        manifest_path: str,
+        parent: Optional[QtCore.QObject] = None,
+    ):
+        super(ValidationThread, self).__init__(parent)
+        self.output_dir = output_dir
+        self.manifest_path = manifest_path
+
+    def run(self) -> None:
+        try:
+            from scripts.validate_uavgpr_dataset import validate_dataset
+
+            result = validate_dataset(self.output_dir, self.manifest_path)
+            self.success.emit(result)
+        except Exception:
+            self.failure.emit(traceback.format_exc())
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super(MainWindow, self).__init__()
@@ -2693,6 +2717,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resize(1600, 980)
         self.worker = None
         self.processing_worker = None
+        self.validation_worker = None
         self.current_artifacts = None
         self.current_processing_report_path = ""
         self.current_bscan_data = None
@@ -3218,6 +3243,22 @@ class MainWindow(QtWidgets.QMainWindow):
         browse_row.addWidget(browse)
         form.addRow("MyGPR 根目录", self._wrap_layout(browse_row))
 
+        self.validate_dataset_button = QtWidgets.QPushButton("运行数据集检查")
+        self.validate_dataset_button.setEnabled(False)
+        self.validate_dataset_button.clicked.connect(self.on_validate_dataset)
+        self.open_manifest_button = QtWidgets.QPushButton("打开 manifest")
+        self.open_manifest_button.setEnabled(False)
+        self.open_manifest_button.clicked.connect(self.on_open_manifest)
+        validation_row = QtWidgets.QHBoxLayout()
+        validation_row.addWidget(self.validate_dataset_button)
+        validation_row.addWidget(self.open_manifest_button)
+        form.addRow("", self._wrap_layout(validation_row))
+
+        self.validation_status_label = QtWidgets.QLabel("先运行仿真生成 manifest。")
+        self.validation_status_label.setWordWrap(True)
+        self.validation_status_label.setStyleSheet("color:#94a3b8;")
+        form.addRow("", self.validation_status_label)
+
         self.processing_report_button = QtWidgets.QPushButton("生成 HTML 报告")
         self.processing_report_button.setEnabled(False)
         self.processing_report_button.clicked.connect(self.on_run_processing_report)
@@ -3656,10 +3697,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self.log("主输出 .out: {0}".format(artifacts.primary_out_path))
         if artifacts.manifest_path and os.path.exists(artifacts.manifest_path):
             self.log("数据清单: {0}".format(artifacts.manifest_path))
+            self.validate_dataset_button.setEnabled(True)
+            self.open_manifest_button.setEnabled(True)
+            self.validation_status_label.setText("manifest 已生成，可运行数据集检查。")
             self.processing_report_button.setEnabled(bool(artifacts.primary_out_path))
             self.processing_report_label.setText(
                 "可基于当前 manifest 生成 MyGPR HTML 处理报告。"
             )
+            if artifacts.primary_out_path:
+                self.start_validation(artifacts.manifest_path)
         self.open_result_button.setEnabled(True)
 
     def on_failure(self, trace: str) -> None:
@@ -3681,6 +3727,72 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if directory:
             self.mygpr_root_edit.setText(directory)
+
+    def on_validate_dataset(self) -> None:
+        manifest_path = ""
+        if self.current_artifacts is not None:
+            manifest_path = self.current_artifacts.manifest_path
+        if not manifest_path or not os.path.exists(manifest_path):
+            manifest_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self,
+                "选择 UavGPR manifest",
+                self.output_root_edit.text(),
+                "JSON 文件 (*.json)",
+            )
+        if manifest_path:
+            self.start_validation(manifest_path)
+
+    def start_validation(self, manifest_path: str) -> None:
+        if self.validation_worker is not None and self.validation_worker.isRunning():
+            QtWidgets.QMessageBox.warning(self, "忙碌", "数据集检查正在运行。")
+            return
+        output_dir = os.path.dirname(os.path.abspath(manifest_path))
+        self.validate_dataset_button.setEnabled(False)
+        self.validation_status_label.setText("正在检查数据集...")
+        self.log("数据集检查 manifest: {0}".format(manifest_path))
+        self.validation_worker = ValidationThread(
+            output_dir=output_dir,
+            manifest_path=manifest_path,
+            parent=self,
+        )
+        self.validation_worker.success.connect(self.on_validation_success)
+        self.validation_worker.failure.connect(self.on_validation_failure)
+        self.validation_worker.start()
+
+    def on_validation_success(self, result) -> None:
+        errors = result.errors()
+        warnings = result.warnings()
+        for message in result.messages:
+            self.log("[{0}] {1}".format(message.level.upper(), message.text))
+        if errors:
+            self.validation_status_label.setText(
+                "数据集检查失败：{0} 个错误。".format(len(errors))
+            )
+        elif warnings:
+            self.validation_status_label.setText(
+                "数据集检查通过，有 {0} 个警告。".format(len(warnings))
+            )
+        else:
+            self.validation_status_label.setText("数据集检查通过。")
+        self.validate_dataset_button.setEnabled(True)
+
+    def on_validation_failure(self, trace: str) -> None:
+        self.validation_status_label.setText("数据集检查失败。")
+        self.validate_dataset_button.setEnabled(True)
+        self.log(trace)
+
+    def on_open_manifest(self) -> None:
+        target = ""
+        if self.current_artifacts is not None:
+            target = self.current_artifacts.manifest_path
+        if target and os.path.exists(target):
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(target))
+        else:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "manifest 不存在",
+                "当前没有可打开的 manifest。",
+            )
 
     def on_run_processing_report(self) -> None:
         if self.processing_worker is not None and self.processing_worker.isRunning():

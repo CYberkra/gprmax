@@ -17,12 +17,14 @@
 # along with gprMax.  If not, see <http://www.gnu.org/licenses/>.
 
 import os
+import tempfile
 import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6 import QtWidgets
 
+from gprmax_gui_pyside6 import BuildArtifacts
 from gprmax_gui_pyside6 import MainWindow
 
 
@@ -51,7 +53,32 @@ class TestUavGprGuiUiState(unittest.TestCase):
             self.assertFalse(window.lift_off_spin.isHidden())
             self.assertFalse(window.host_eps_spin.isHidden())
             self.assertFalse(window.host_sigma_spin.isHidden())
+            self.assertFalse(window.validate_dataset_button.isHidden())
             self.assertFalse(window.processing_report_button.isHidden())
+            self.assertFalse(window.validate_dataset_button.isEnabled())
+        finally:
+            window.close()
+
+    def test_validation_controls_enable_after_manifest_is_available(self):
+        window = MainWindow()
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                manifest_path = os.path.join(tmpdir, "case_manifest.json")
+                with open(manifest_path, "w", encoding="utf-8") as fobj:
+                    fobj.write("{}\n")
+                artifacts = BuildArtifacts(
+                    output_dir=tmpdir,
+                    input_path=os.path.join(tmpdir, "case.in"),
+                    preview_path=os.path.join(tmpdir, "case_preview.png"),
+                    metadata_path=os.path.join(tmpdir, "case_metadata.json"),
+                    manifest_path=manifest_path,
+                )
+
+                window.on_success("fake success", artifacts)
+
+                self.assertTrue(window.validate_dataset_button.isEnabled())
+                self.assertTrue(window.open_manifest_button.isEnabled())
+                self.assertIn("manifest", window.validation_status_label.text())
         finally:
             window.close()
 

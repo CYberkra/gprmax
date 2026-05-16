@@ -77,3 +77,20 @@ MyGPR should treat these manifest fields as the first-class read contract:
 Processing choices such as filtering, gain, migration, detection metrics, and
 controller integration belong in `D:\CDUT-UavGPR-Controller\MyGPR`, not in this
 simulation producer.
+
+## Before Handoff To MyGPR
+
+Run the local GUI gate before handing a generated dataset to MyGPR:
+
+```powershell
+.\scripts\run_uavgpr_gui_checks.ps1
+```
+
+For a specific generated output folder, run the validator directly:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\validate_uavgpr_dataset.py <generated-output-folder>
+```
+
+The handoff is ready only when the script passes, the manifest validates, and
+`primary_out_file` points to the raw `.out` or `_merged.out` file.

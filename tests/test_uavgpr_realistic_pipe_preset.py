@@ -17,6 +17,7 @@
 # along with gprMax.  If not, see <http://www.gnu.org/licenses/>.
 
 import argparse
+import math
 import unittest
 
 import numpy as np
@@ -25,8 +26,10 @@ from gprmax_gui_pyside6 import PRESETS
 from gprmax_gui_pyside6 import PhysicsAuditor
 from gprmax_gui_pyside6 import ScenarioBuilder
 from gprmax_gui_pyside6 import SimpleTargetSpec
+from gprmax_gui_pyside6 import SimulationConfig
 from gprmax_gui_pyside6 import apply_mild_time_gain
 from gprmax_gui_pyside6 import build_smoke_config
+from gprmax_gui_pyside6 import material_velocity
 from gprmax_gui_pyside6 import remove_horizontal_background
 
 
@@ -141,6 +144,81 @@ class TestUavGprRealisticPipePreset(unittest.TestCase):
         self.assertEqual(len(notes["simple_targets"]), 2)
         self.assertEqual(notes["simple_targets"][1]["shape"], "box")
         self.assertEqual(notes["simple_targets"][1]["material_name"], "target_concrete")
+
+    def test_extra_target_outside_ground_is_audited(self):
+        config = build_smoke_config(
+            self.make_args_for_preset("uav_pipe_gain_workflow_bscan", 12)
+        )
+        config.extra_targets = [
+            SimpleTargetSpec(
+                enabled=True,
+                shape="cylinder",
+                material_name="pec",
+                center_x=0.820,
+                center_y=0.545,
+                radius=0.020,
+            )
+        ]
+
+        report = PhysicsAuditor().build_report(config)
+
+        self.assertTrue(report.has_errors())
+        self.assertIn(
+            "异常体 #2",
+            "\n".join(message.text for message in report.messages),
+        )
+        self.assertIn(
+            "宿主半空间",
+            "\n".join(
+                message.text for message in report.messages if message.level == "error"
+            ),
+        )
+
+    def test_closest_twt_uses_effective_scan_step(self):
+        config = SimulationConfig(
+            domain_x=1.200,
+            domain_y=0.850,
+            dx=0.010,
+            dy=0.010,
+            ground_surface_y=0.550,
+            lift_off=0.150,
+            source_start_x=0.100,
+            receiver_offset=0.120,
+            scan_step=0.014,
+            n_traces=6,
+            host_eps_r=9.0,
+            target_center_x=0.275,
+            target_center_y=0.220,
+            target_radius=0.035,
+            time_window_ns=50.0,
+            center_freq_mhz=500.0,
+            preset_key="uav_pipe_gain_workflow_bscan",
+        )
+
+        report = PhysicsAuditor().build_report(config)
+        velocity = material_velocity(config.host_eps_r)
+        expected = min(
+            (
+                math.hypot(
+                    config.source_start_x + index * config.effective_scan_step
+                    - config.target_center_x,
+                    config.source_y - config.target_center_y,
+                )
+                + math.hypot(
+                    config.source_start_x
+                    + index * config.effective_scan_step
+                    + config.receiver_offset
+                    - config.target_center_x,
+                    config.receiver_y - config.target_center_y,
+                )
+            )
+            / velocity
+            * 1e9
+            for index in range(config.n_traces)
+        )
+
+        self.assertEqual(report.derived["effective_scan_step"], config.effective_scan_step)
+        self.assertAlmostEqual(report.derived["closest_twt_ns"], expected, places=9)
 
     def test_preview_processing_keeps_raw_data_separate(self):
         raw = np.array(

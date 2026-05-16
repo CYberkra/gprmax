@@ -1014,11 +1014,12 @@ class PhysicsAuditor(object):
         source_y = config.source_y
         min_dl = min(config.dx, config.dy)
 
-        target_x_min, target_x_max, target_y_min, target_y_max = self._target_bounds(
-            config
+        target_records = self._target_records(config)
+        target_x_min, target_x_max, target_y_min, target_y_max = (
+            self._aggregate_target_bounds(target_records)
         )
-        target_x = 0.5 * (target_x_min + target_x_max)
-        target_y = 0.5 * (target_y_min + target_y_max)
+        target_x = target_records[0]["center_x"] if target_records else 0.0
+        target_y = target_records[0]["center_y"] if target_records else 0.0
 
         report.derived.update(
             {
@@ -1033,8 +1034,17 @@ class PhysicsAuditor(object):
                 "requested_scan_step": config.scan_step,
                 "effective_scan_step": config.effective_scan_step,
                 "scan_step_cells": float(config.scan_step_cells),
+                "target_count": float(len(target_records)),
             }
         )
+        for target in target_records:
+            index = int(target["index"])
+            report.derived["target_{0}_center_x_m".format(index)] = float(
+                target["center_x"]
+            )
+            report.derived["target_{0}_center_y_m".format(index)] = float(
+                target["center_y"]
+            )
 
         if config.ground_surface_y <= 0 or config.ground_surface_y >= config.domain_y:
             report.add("error", "地表 y 坐标必须严格位于计算域内部。")
@@ -1042,14 +1052,16 @@ class PhysicsAuditor(object):
         if source_y > config.domain_y:
             report.add("error", "发射源/接收器的 y 坐标超出了计算域。")
 
-        if target_y_min < 0 or target_y_max > config.ground_surface_y:
-            report.add(
-                "error",
-                "目标必须位于地表以下的宿主半空间内部。",
-            )
+        for target in target_records:
+            label = str(target["label"])
+            if target["y_min"] < 0 or target["y_max"] > config.ground_surface_y:
+                report.add(
+                    "error",
+                    "{0} 必须位于地表以下的宿主半空间内部。".format(label),
+                )
 
-        if target_x_min < 0 or target_x_max > config.domain_x:
-            report.add("error", "目标在 x 方向超出了计算域。")
+            if target["x_min"] < 0 or target["x_max"] > config.domain_x:
+                report.add("error", "{0} 在 x 方向超出了计算域。".format(label))
 
         if config.receiver_end_x > config.domain_x:
             report.add("error", "接收器扫描越出计算域，请减小道数或步长。")
@@ -1136,26 +1148,32 @@ class PhysicsAuditor(object):
                 )
 
         target_min_dimension = self._target_min_dimension(config)
-        target_cells = target_min_dimension / min_dl
-        if target_cells < 5:
-            report.add(
-                "error",
-                "目标最小尺寸只有 {0} 个网格，分辨率明显不足。".format(
-                    human_cells(target_cells)
-                ),
-            )
-        elif target_cells < 10:
-            report.add(
-                "warning",
-                "目标最小尺寸为 {0} 个网格，可以使用但不理想。".format(
-                    human_cells(target_cells)
-                ),
-            )
-        else:
-            report.add(
-                "success",
-                "目标最小尺寸为 {0} 个网格。".format(human_cells(target_cells)),
-            )
+        for target in target_records:
+            target_cells = float(target["min_dimension"]) / min_dl
+            if target_cells < 5:
+                report.add(
+                    "error",
+                    "{0} 最小尺寸只有 {1} 个网格，分辨率明显不足。".format(
+                        target["label"],
+                        human_cells(target_cells),
+                    ),
+                )
+            elif target_cells < 10:
+                report.add(
+                    "warning",
+                    "{0} 最小尺寸为 {1} 个网格，可以使用但不理想。".format(
+                        target["label"],
+                        human_cells(target_cells),
+                    ),
+                )
+            else:
+                report.add(
+                    "success",
+                    "{0} 最小尺寸为 {1} 个网格。".format(
+                        target["label"],
+                        human_cells(target_cells),
+                    ),
+                )
 
         if config.target_shape == "crack":
             crack_opening_cells = target_min_dimension / min_dl
@@ -1265,13 +1283,19 @@ class PhysicsAuditor(object):
 
         scan_mid_start = config.source_start_x + 0.5 * config.receiver_offset
         scan_mid_end = config.source_end_x + 0.5 * config.receiver_offset
-        if target_x_max < scan_mid_start or target_x_min > scan_mid_end:
-            report.add(
-                "warning",
-                "目标 x 不在测线中点覆盖范围内，双曲线可能被截断或缺失。",
-            )
-        else:
-            report.add("success", "目标 x 位于测线中点覆盖范围内。")
+        for target in target_records:
+            if target["x_max"] < scan_mid_start or target["x_min"] > scan_mid_end:
+                report.add(
+                    "warning",
+                    "{0} x 不在测线中点覆盖范围内，双曲线可能被截断或缺失。".format(
+                        target["label"]
+                    ),
+                )
+            else:
+                report.add(
+                    "success",
+                    "{0} x 位于测线中点覆盖范围内。".format(target["label"]),
+                )
 
         closest_twt_ns = self._closest_two_way_time_ns(config)
         report.derived["closest_twt_ns"] = closest_twt_ns
@@ -1324,6 +1348,80 @@ class PhysicsAuditor(object):
             config.target_center_y + 0.5 * config.target_size_y,
         )
 
+    def _target_records(self, config: SimulationConfig) -> List[Dict[str, float]]:
+        records = []
+        bounds = self._target_bounds(config)
+        records.append(
+            self._target_record(
+                1,
+                "异常体 #1",
+                bounds,
+                self._target_min_dimension(config),
+                self._primary_target_points(config),
+            )
+        )
+        for target in config.extra_targets:
+            if not target.enabled:
+                continue
+            min_dimension = (
+                2.0 * target.radius
+                if target.shape == "cylinder"
+                else min(target.width, target.height)
+            )
+            records.append(
+                self._target_record(
+                    len(records) + 1,
+                    "异常体 #{0}".format(len(records) + 1),
+                    target.bounds(),
+                    min_dimension,
+                    [(target.center_x, target.center_y)],
+                )
+            )
+        return records
+
+    def _target_record(
+        self,
+        index: int,
+        label: str,
+        bounds: Tuple[float, float, float, float],
+        min_dimension: float,
+        points: List[Tuple[float, float]],
+    ) -> Dict[str, object]:
+        x_min, x_max, y_min, y_max = bounds
+        return {
+            "index": index,
+            "label": label,
+            "x_min": x_min,
+            "x_max": x_max,
+            "y_min": y_min,
+            "y_max": y_max,
+            "center_x": 0.5 * (x_min + x_max),
+            "center_y": 0.5 * (y_min + y_max),
+            "min_dimension": min_dimension,
+            "points": points,
+        }
+
+    def _aggregate_target_bounds(
+        self, target_records: List[Dict[str, object]]
+    ) -> Tuple[float, float, float, float]:
+        if not target_records:
+            return (0.0, 0.0, 0.0, 0.0)
+        return (
+            min(float(target["x_min"]) for target in target_records),
+            max(float(target["x_max"]) for target in target_records),
+            min(float(target["y_min"]) for target in target_records),
+            max(float(target["y_max"]) for target in target_records),
+        )
+
+    def _primary_target_points(
+        self, config: SimulationConfig
+    ) -> List[Tuple[float, float]]:
+        if config.target_shape == "crack":
+            return [
+                (crack.center_x, crack.center_y) for crack in config.crack_segments()
+            ]
+        return [(config.target_center_x, config.target_center_y)]
+
     def _target_min_dimension(self, config: SimulationConfig) -> float:
         if config.target_shape == "cylinder":
             return 2.0 * config.target_radius
@@ -1336,8 +1434,8 @@ class PhysicsAuditor(object):
 
     def _inner_pml_buffer_cells(self, config: SimulationConfig) -> float:
         pml = 10.0
-        target_x_min, target_x_max, target_y_min, target_y_max = self._target_bounds(
-            config
+        target_x_min, target_x_max, target_y_min, target_y_max = (
+            self._aggregate_target_bounds(self._target_records(config))
         )
         clearances = [
             config.source_start_x / config.dx - pml,
@@ -1356,14 +1454,11 @@ class PhysicsAuditor(object):
     def _closest_two_way_time_ns(self, config: SimulationConfig) -> float:
         velocity = material_velocity(config.host_eps_r)
         min_time = None
-        if config.target_shape == "crack":
-            target_points = [
-                (crack.center_x, crack.center_y) for crack in config.crack_segments()
-            ]
-        else:
-            target_points = [(config.target_center_x, config.target_center_y)]
+        target_points = []
+        for target in self._target_records(config):
+            target_points.extend(target["points"])
         for index in range(config.n_traces):
-            tx_x = config.source_start_x + index * config.scan_step
+            tx_x = config.source_start_x + index * config.effective_scan_step
             rx_x = tx_x + config.receiver_offset
             for target_x, target_y in target_points:
                 tx_path = math.hypot(tx_x - target_x, config.source_y - target_y)

@@ -1,0 +1,30 @@
+schema: gprmax_ground_truth_v1
+dataset_id: sim_pipe_001
+model_file: sim_pipe_001.in
+output_file: sim_pipe_001_merged.out
+
+target_roi:
+  label: pipe_hyperbola_apex_window
+  trace_range: [42, 48]
+  sample_range: [720, 860]
+
+background_roi:
+  label: nearby_late_background_window
+  trace_range: [10, 25]
+  sample_range: [720, 860]
+
+target:
+  type: pipe
+  depth_m: 0.330
+  material: pec
+  center_x_m: 0.620
+  center_y_m: 0.220
+  radius_m: 0.035
+  notes: Single PEC cylinder in uniform dry soil for AutoTune validation.
+
+metrics:
+  cnr_db: null
+  background_energy: null
+  target_energy: null
+  localization_error_trace: null
+  localization_error_sample: null

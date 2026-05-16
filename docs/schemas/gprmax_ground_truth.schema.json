@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/gprmax_ground_truth.schema.json",
+  "title": "gprMax Ground Truth Metadata",
+  "description": "Minimal ground truth metadata for AutoTune validation on gprMax UavGPR simulations.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "dataset_id",
+    "model_file",
+    "output_file",
+    "target_roi",
+    "background_roi",
+    "target",
+    "metrics"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "gprmax_ground_truth_v1"
+    },
+    "dataset_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "output_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target_roi": {
+      "$ref": "#/$defs/roi"
+    },
+    "background_roi": {
+      "$ref": "#/$defs/roi"
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "depth_m", "material"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "depth_m": {
+          "type": "number",
+          "minimum": 0
+        },
+        "material": {
+          "type": "string",
+          "minLength": 1
+        },
+        "center_x_m": {
+          "type": "number"
+        },
+        "center_y_m": {
+          "type": "number"
+        },
+        "radius_m": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["number", "integer", "null", "string", "boolean"]
+      },
+      "required": [
+        "cnr_db",
+        "background_energy",
+        "target_energy",
+        "localization_error_trace",
+        "localization_error_sample"
+      ],
+      "properties": {
+        "cnr_db": {
+          "type": ["number", "null"]
+        },
+        "background_energy": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "target_energy": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "localization_error_trace": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "localization_error_sample": {
+          "type": ["number", "null"],
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "$defs": {
+    "roi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trace_range", "sample_range"],
+      "properties": {
+        "trace_range": {
+          "$ref": "#/$defs/inclusive_index_range"
+        },
+        "sample_range": {
+          "$ref": "#/$defs/inclusive_index_range"
+        },
+        "label": {
+          "type": "string"
+        }
+      }
+    },
+    "inclusive_index_range": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "integer",
+          "minimum": 0
+        }
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    }
+  }
+}

@@ -84,3 +84,8 @@ MyGPR should be able to consume this project's output without guessing:
 - Use `Positions` or `rxsteps * dx` to build the spatial axis.
 - Use `dt` and `Iterations` for the time axis.
 - Use metadata and generated `.in` as scenario truth.
+
+See `docs/mygpr_handoff.md` for the minimum reader contract and
+`docs/uavgpr_baseline_scenarios.md` for the first accepted baseline scenario
+set. Use `scripts/validate_uavgpr_dataset.py` as the local acceptance gate
+before sending a generated folder to MyGPR.

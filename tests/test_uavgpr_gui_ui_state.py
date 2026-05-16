@@ -42,6 +42,7 @@ class TestUavGprGuiUiState(unittest.TestCase):
             self.assertEqual(config.preset_key, "uav_pipe_gain_workflow_bscan")
             self.assertEqual(window.output_name_edit.text(), "uavgpr_baseline")
             self.assertFalse(window.advanced_options_check.isChecked())
+            self.assertFalse(window.use_gpu_check.isChecked())
 
             self.assertTrue(window.source_group.isHidden())
             self.assertTrue(window.domain_x_spin.isHidden())
@@ -56,6 +57,7 @@ class TestUavGprGuiUiState(unittest.TestCase):
             self.assertFalse(window.validate_dataset_button.isHidden())
             self.assertFalse(window.processing_report_button.isHidden())
             self.assertFalse(window.validate_dataset_button.isEnabled())
+            self.assertFalse(window.cancel_button.isEnabled())
         finally:
             window.close()
 

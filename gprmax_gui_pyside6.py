@@ -38,6 +38,7 @@ import subprocess
 import sys
 import time
 import traceback
+from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -2114,6 +2115,8 @@ class ScenarioBuilder(object):
 class GprMaxRunner(object):
     def __init__(self, log_callback: Optional[Callable[[str], None]] = None):
         self.log_callback = log_callback or (lambda message: None)
+        self.active_process = None
+        self.cancel_requested = False
 
     def log(self, message: str) -> None:
         try:
@@ -2121,6 +2124,12 @@ class GprMaxRunner(object):
         except UnicodeEncodeError:
             safe_message = message.encode("gbk", errors="replace").decode("gbk")
             self.log_callback(safe_message)
+
+    def cancel(self) -> None:
+        self.cancel_requested = True
+        process = self.active_process
+        if process is not None and process.poll() is None:
+            process.terminate()
 
     def run(
         self, config: SimulationConfig, artifacts: BuildArtifacts
@@ -2142,6 +2151,8 @@ class GprMaxRunner(object):
                 return_code, output = self._run_process(config, artifacts, False)
 
         if return_code != 0:
+            if self.cancel_requested:
+                raise RuntimeError("用户取消运行")
             raise RuntimeError("gprMax 运行失败，退出码为 {0}".format(return_code))
 
         if config.geometry_only:
@@ -2244,24 +2255,31 @@ class GprMaxRunner(object):
         self.log("运行模式: {0}".format("GPU" if use_gpu else "CPU"))
         self.log("Running: {0}".format(" ".join(command)))
 
+        self.cancel_requested = False
         process = self._spawn_process(
             command=command,
             cwd=artifacts.output_dir,
             use_gpu=use_gpu,
         )
+        self.active_process = process
 
-        output_lines = []
+        output_lines = deque(maxlen=2000)
         t0 = time.perf_counter()
-        if process.stdout is not None:
-            for line in process.stdout:
-                text = line.rstrip()
-                output_lines.append(text)
-                if text:
-                    self.log(text)
+        try:
+            if process.stdout is not None:
+                for line in process.stdout:
+                    text = line.rstrip()
+                    output_lines.append(text)
+                    if text:
+                        self.log(text)
 
-        return_code = process.wait()
+            return_code = process.wait()
+        finally:
+            self.active_process = None
         elapsed = time.perf_counter() - t0
         self.log("仿真耗时: {0:.2f} s".format(elapsed))
+        if self.cancel_requested:
+            output_lines.append("用户取消运行")
         return return_code, "\n".join(output_lines)
 
     def _nvcc_available(self) -> bool:
@@ -2620,12 +2638,18 @@ class RunnerThread(QtCore.QThread):
         super(RunnerThread, self).__init__(parent)
         self.config = config
         self.run_simulation = run_simulation
+        self.runner = None
+
+    def cancel(self) -> None:
+        self.requestInterruption()
+        if self.runner is not None:
+            self.runner.cancel()
 
     def run(self) -> None:
         try:
             auditor = PhysicsAuditor()
             builder = ScenarioBuilder()
-            runner = GprMaxRunner(log_callback=self.log_message.emit)
+            self.runner = GprMaxRunner(log_callback=self.log_message.emit)
 
             self.progress.emit(5, "执行物理审计")
             report = auditor.build_report(self.config)
@@ -2645,16 +2669,18 @@ class RunnerThread(QtCore.QThread):
                 return
 
             self.progress.emit(35, "运行 gprMax")
-            artifacts = runner.run(self.config, artifacts)
+            artifacts = self.runner.run(self.config, artifacts)
 
             if artifacts.primary_out_path:
-                data, dt = runner.load_merged_bscan(artifacts.primary_out_path)
+                data, dt = self.runner.load_merged_bscan(artifacts.primary_out_path)
                 self.bscan_ready.emit(data, dt)
 
             self.progress.emit(100, "仿真完成")
             self.success.emit("仿真与合并已完成。", artifacts)
         except Exception:
             self.failure.emit(traceback.format_exc())
+        finally:
+            self.runner = None
 
 
 class ProcessingReportThread(QtCore.QThread):
@@ -2861,6 +2887,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.progress_bar.setValue(0)
         footer.addWidget(self.status_label)
         footer.addWidget(self.progress_bar, 1)
+
+        self.cancel_button = QtWidgets.QPushButton("取消")
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.clicked.connect(self.on_cancel_current_task)
+        footer.addWidget(self.cancel_button)
 
         save_button = QtWidgets.QPushButton("保存预设")
         save_button.clicked.connect(self.on_save_preset)
@@ -3153,8 +3184,8 @@ class MainWindow(QtWidgets.QMainWindow):
         group = QtWidgets.QGroupBox("运行设置")
         form = QtWidgets.QFormLayout(group)
         self.python_edit = QtWidgets.QLineEdit(DEFAULT_PYTHON)
-        self.use_gpu_check = QtWidgets.QCheckBox("使用 GPU")
-        self.use_gpu_check.setChecked(True)
+        self.use_gpu_check = QtWidgets.QCheckBox("尝试使用 GPU（可用时）")
+        self.use_gpu_check.setChecked(False)
         self.geometry_fixed_check = QtWidgets.QCheckBox(
             "固定几何加速 (--geometry-fixed)"
         )
@@ -3654,6 +3685,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log_view.clear()
         self.progress_bar.setValue(0)
         self.status_label.setText("执行中...")
+        self.cancel_button.setEnabled(True)
+        self.build_button.setEnabled(False)
+        self.run_button.setEnabled(False)
         self.worker = RunnerThread(
             config=config, run_simulation=run_simulation, parent=self
         )
@@ -3691,6 +3725,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_artifacts = artifacts
         self.progress_bar.setValue(100)
         self.status_label.setText("完成")
+        self.cancel_button.setEnabled(False)
+        self.refresh_preview_and_audit()
         self.log(message)
         self.log("结果目录: {0}".format(artifacts.output_dir))
         if artifacts.primary_out_path:
@@ -3711,6 +3747,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_failure(self, trace: str) -> None:
         self.progress_bar.setValue(0)
         self.status_label.setText("失败")
+        self.cancel_button.setEnabled(False)
+        self.refresh_preview_and_audit()
         self.log(trace)
         QtWidgets.QMessageBox.critical(self, "任务失败", trace[:4000])
 
@@ -3815,6 +3853,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_processing_report_path = ""
         self.open_report_button.setEnabled(False)
         self.processing_report_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
         self.status_label.setText("生成 MyGPR 处理报告...")
         self.log("处理报告 manifest: {0}".format(manifest_path))
         self.processing_worker = ProcessingReportThread(
@@ -3831,6 +3870,7 @@ class MainWindow(QtWidgets.QMainWindow):
         report_html = str(summary.get("report_html", ""))
         self.current_processing_report_path = report_html
         self.status_label.setText("处理报告完成")
+        self.cancel_button.setEnabled(False)
         self.processing_report_button.setEnabled(True)
         self.open_report_button.setEnabled(bool(report_html and os.path.exists(report_html)))
         self.processing_report_label.setText(report_html or "处理报告已生成。")
@@ -3845,9 +3885,23 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def on_processing_report_failure(self, trace: str) -> None:
         self.status_label.setText("处理报告失败")
+        self.cancel_button.setEnabled(False)
         self.processing_report_button.setEnabled(True)
         self.log(trace)
         QtWidgets.QMessageBox.critical(self, "处理报告失败", trace[:4000])
+
+    def on_cancel_current_task(self) -> None:
+        if self.worker is not None and self.worker.isRunning():
+            self.log("请求取消当前 gprMax 运行。")
+            self.worker.cancel()
+            self.status_label.setText("正在取消...")
+            return
+        if self.processing_worker is not None and self.processing_worker.isRunning():
+            self.log("已请求取消处理报告；当前步骤会在可中断点结束。")
+            self.processing_worker.requestInterruption()
+            self.status_label.setText("已请求取消处理报告...")
+            return
+        self.cancel_button.setEnabled(False)
 
     def on_open_processing_report(self) -> None:
         target = self.current_processing_report_path

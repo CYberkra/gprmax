@@ -117,6 +117,16 @@ class TestUavGprRealisticPipePreset(unittest.TestCase):
         self.assertEqual(notes["scan_geometry"]["uav_lift_off_m"], 0.150)
         self.assertEqual(len(notes["simple_targets"]), 1)
 
+    def test_short_smoke_trace_override_keeps_target_in_coverage(self):
+        config = build_smoke_config(
+            self.make_args_for_preset("uav_pipe_gain_workflow_bscan", 2)
+        )
+        scan_mid_start = config.source_start_x + 0.5 * config.receiver_offset
+        scan_mid_end = config.source_end_x + 0.5 * config.receiver_offset
+
+        self.assertLessEqual(scan_mid_start, config.target_center_x)
+        self.assertGreaterEqual(scan_mid_end, config.target_center_x)
+
     def test_optional_second_simple_target_is_in_input_and_handoff_notes(self):
         config = build_smoke_config(
             self.make_args_for_preset("uav_pipe_gain_workflow_bscan", 12)

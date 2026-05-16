@@ -4141,7 +4141,7 @@ class MainWindow(QtWidgets.QMainWindow):
 def build_smoke_config(args: argparse.Namespace) -> SimulationConfig:
     preset_key = getattr(args, "smoke_preset", "official_cylinder_bscan")
     preset = PRESETS[preset_key]
-    return SimulationConfig(
+    config = SimulationConfig(
         title=preset["title"],
         output_root=args.output_root,
         output_name="{0}_smoke".format(preset_key),
@@ -4186,6 +4186,19 @@ def build_smoke_config(args: argparse.Namespace) -> SimulationConfig:
         source_polarisation=preset.get("source_polarisation", "z"),
         preset_key=preset_key,
     )
+    if args.traces != preset["n_traces"] and config.n_traces > 1:
+        desired_start_x = (
+            config.target_center_x
+            - 0.5 * config.receiver_offset
+            - 0.5 * (config.n_traces - 1) * config.effective_scan_step
+        )
+        max_start_x = (
+            config.domain_x
+            - config.receiver_offset
+            - (config.n_traces - 1) * config.effective_scan_step
+        )
+        config.source_start_x = min(max(desired_start_x, 0.0), max(0.0, max_start_x))
+    return config
 
 
 def run_smoke_test(args: argparse.Namespace) -> int:

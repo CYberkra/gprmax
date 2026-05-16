@@ -351,6 +351,19 @@ def validate_dataset(
 
     manifest = _load_json(manifest_path)
     _add(messages, "ok", "manifest exists: {0}".format(manifest_path))
+    if manifest.get("schema") == "uavgpr_manifest_v1":
+        _add(messages, "ok", "manifest schema is uavgpr_manifest_v1")
+    else:
+        _add(messages, "error", "manifest schema must be uavgpr_manifest_v1")
+
+    readiness = manifest.get("dataset_readiness")
+    if not isinstance(readiness, dict):
+        _add(messages, "error", "manifest dataset_readiness object is missing")
+    elif not readiness.get("primary_out_file"):
+        _add(messages, "error", "dataset_readiness.primary_out_file is not true")
+    else:
+        _add(messages, "ok", "dataset_readiness.primary_out_file is true")
+
     metadata = _read_metadata(manifest, output_dir)
     if metadata:
         _add(messages, "ok", "metadata JSON is readable")

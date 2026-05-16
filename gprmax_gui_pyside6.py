@@ -2419,7 +2419,30 @@ class GprMaxRunner(object):
 
         scan_start_mid_x = config.source_start_x + 0.5 * config.receiver_offset
         scan_end_mid_x = config.source_end_x + 0.5 * config.receiver_offset
+        output_dir = os.path.abspath(artifacts.output_dir)
+        path_fields = {
+            "input_file": artifacts.input_path,
+            "metadata_file": artifacts.metadata_path,
+            "preview_file": artifacts.preview_path,
+            "primary_out_file": artifacts.primary_out_path,
+            "merged_out_file": artifacts.merged_out_path,
+            "bscan_preview_file": artifacts.bscan_png_path,
+            "background_removed_preview_file": artifacts.background_removed_png_path,
+            "background_removed_mild_gain_preview_file": artifacts.background_removed_gain_png_path,
+            "geometry_view_file": artifacts.geometry_view_path,
+        }
+        relative_paths = {
+            key: self._relative_to_output_dir(output_dir, value)
+            for key, value in path_fields.items()
+            if value
+        }
+        relative_paths["raw_out_files"] = [
+            self._relative_to_output_dir(output_dir, value)
+            for value in artifacts.output_out_paths
+            if value
+        ]
         manifest = {
+            "schema": "uavgpr_manifest_v1",
             "created_at": datetime.now().isoformat(),
             "app": "{0} {1}".format(APP_TITLE, APP_VERSION),
             "input_file": artifacts.input_path,
@@ -2431,6 +2454,31 @@ class GprMaxRunner(object):
             "bscan_preview_file": artifacts.bscan_png_path,
             "background_removed_preview_file": artifacts.background_removed_png_path,
             "background_removed_mild_gain_preview_file": artifacts.background_removed_gain_png_path,
+            "paths_relative_to_output_dir": relative_paths,
+            "dataset_readiness": {
+                "input_file": bool(
+                    artifacts.input_path and os.path.exists(artifacts.input_path)
+                ),
+                "primary_out_file": bool(
+                    artifacts.primary_out_path
+                    and os.path.exists(artifacts.primary_out_path)
+                ),
+                "merged_out_file": bool(
+                    artifacts.merged_out_path and os.path.exists(artifacts.merged_out_path)
+                ),
+                "metadata_file": bool(
+                    artifacts.metadata_path and os.path.exists(artifacts.metadata_path)
+                ),
+                "bscan_preview_file": bool(
+                    artifacts.bscan_png_path and os.path.exists(artifacts.bscan_png_path)
+                ),
+                "background_preview_files": bool(
+                    artifacts.background_removed_png_path
+                    and os.path.exists(artifacts.background_removed_png_path)
+                    and artifacts.background_removed_gain_png_path
+                    and os.path.exists(artifacts.background_removed_gain_png_path)
+                ),
+            },
             "component": "Ez",
             "requested_scan_step_m": config.scan_step,
             "effective_scan_step_m": config.effective_scan_step,
@@ -2471,6 +2519,17 @@ class GprMaxRunner(object):
         }
         with open(artifacts.manifest_path, "w", encoding="utf-8") as fobj:
             json.dump(manifest, fobj, ensure_ascii=False, indent=2)
+
+    def _relative_to_output_dir(self, output_dir: str, path: str) -> str:
+        if not path:
+            return ""
+        try:
+            absolute = os.path.abspath(path)
+            if os.path.commonpath([output_dir, absolute]) == output_dir:
+                return os.path.relpath(absolute, output_dir)
+        except ValueError:
+            pass
+        return path
 
     def load_merged_bscan(self, merged_path: str) -> Tuple[np.ndarray, float]:
         with h5py.File(merged_path, "r") as fobj:

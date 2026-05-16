@@ -74,10 +74,19 @@ class TestValidateUavGprDataset(unittest.TestCase):
         if summary_positions_shape is None:
             summary_positions_shape = [2, 3]
         manifest = {
+            "schema": "uavgpr_manifest_v1",
             "input_file": input_path,
             "metadata_file": metadata_path,
             "primary_out_file": out_path,
             "component": "Ez",
+            "dataset_readiness": {
+                "input_file": True,
+                "primary_out_file": True,
+                "merged_out_file": True,
+                "metadata_file": True,
+                "bscan_preview_file": False,
+                "background_preview_files": False,
+            },
             "primary_out_summary": {
                 "attrs": {
                     "Iterations": 3,
@@ -136,6 +145,40 @@ class TestValidateUavGprDataset(unittest.TestCase):
             self.assertTrue(result.has_errors())
             self.assertIn(
                 "manifest dataset Positions shape does not match HDF5",
+                "\n".join(message.text for message in result.errors()),
+            )
+
+    def test_missing_manifest_schema_is_reported(self):
+        with tempfile.TemporaryDirectory() as root:
+            manifest_path = self.write_dataset(root)
+            with open(manifest_path, "r", encoding="utf-8") as fobj:
+                manifest = json.load(fobj)
+            manifest.pop("schema")
+            with open(manifest_path, "w", encoding="utf-8") as fobj:
+                json.dump(manifest, fobj)
+
+            result = validate_dataset(root)
+
+            self.assertTrue(result.has_errors())
+            self.assertIn(
+                "manifest schema must be uavgpr_manifest_v1",
+                "\n".join(message.text for message in result.errors()),
+            )
+
+    def test_readiness_primary_out_file_is_required(self):
+        with tempfile.TemporaryDirectory() as root:
+            manifest_path = self.write_dataset(root)
+            with open(manifest_path, "r", encoding="utf-8") as fobj:
+                manifest = json.load(fobj)
+            manifest["dataset_readiness"]["primary_out_file"] = False
+            with open(manifest_path, "w", encoding="utf-8") as fobj:
+                json.dump(manifest, fobj)
+
+            result = validate_dataset(root)
+
+            self.assertTrue(result.has_errors())
+            self.assertIn(
+                "dataset_readiness.primary_out_file is not true",
                 "\n".join(message.text for message in result.errors()),
             )
 

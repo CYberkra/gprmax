@@ -57,7 +57,14 @@ class TestUavGprHandoffContract(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             merged_path = os.path.join(tmpdir, "handoff_merged.out")
             manifest_path = os.path.join(tmpdir, "handoff_manifest.json")
+            input_path = os.path.join(tmpdir, "handoff.in")
+            preview_path = os.path.join(tmpdir, "handoff_preview.png")
+            metadata_path = os.path.join(tmpdir, "handoff_metadata.json")
+            bscan_path = os.path.join(tmpdir, "handoff_bscan.png")
             self.write_merged_output(merged_path)
+            for path in (input_path, preview_path, metadata_path, bscan_path):
+                with open(path, "w", encoding="utf-8") as fobj:
+                    fobj.write("test\n")
 
             config = SimulationConfig(
                 output_root=tmpdir,
@@ -69,13 +76,13 @@ class TestUavGprHandoffContract(unittest.TestCase):
             )
             artifacts = BuildArtifacts(
                 output_dir=tmpdir,
-                input_path=os.path.join(tmpdir, "handoff.in"),
-                preview_path=os.path.join(tmpdir, "handoff_preview.png"),
-                metadata_path=os.path.join(tmpdir, "handoff_metadata.json"),
+                input_path=input_path,
+                preview_path=preview_path,
+                metadata_path=metadata_path,
                 manifest_path=manifest_path,
                 primary_out_path=merged_path,
                 merged_out_path=merged_path,
-                bscan_png_path=os.path.join(tmpdir, "handoff_bscan.png"),
+                bscan_png_path=bscan_path,
                 output_out_paths=[
                     os.path.join(tmpdir, "handoff1.out"),
                     os.path.join(tmpdir, "handoff2.out"),
@@ -87,12 +94,32 @@ class TestUavGprHandoffContract(unittest.TestCase):
             with open(manifest_path, "r", encoding="utf-8") as fobj:
                 manifest = json.load(fobj)
 
+            self.assertEqual(manifest["schema"], "uavgpr_manifest_v1")
             self.assertEqual(manifest["primary_out_file"], merged_path)
             self.assertEqual(manifest["merged_out_file"], merged_path)
             self.assertEqual(manifest["component"], "Ez")
+            self.assertTrue(manifest["raw_is_unchanged"])
+            self.assertTrue(manifest["preview_processing_only"])
+            self.assertIn("scan_geometry", manifest)
+            self.assertIn("medium", manifest)
+            self.assertIn("simple_targets", manifest)
             self.assertEqual(manifest["requested_scan_step_m"], 0.012)
             self.assertEqual(manifest["scan_step_cells"], 1)
             self.assertEqual(manifest["effective_scan_step_m"], 0.01)
+            self.assertEqual(
+                manifest["paths_relative_to_output_dir"]["primary_out_file"],
+                "handoff_merged.out",
+            )
+            self.assertEqual(
+                manifest["paths_relative_to_output_dir"]["input_file"],
+                "handoff.in",
+            )
+            readiness = manifest["dataset_readiness"]
+            self.assertTrue(readiness["input_file"])
+            self.assertTrue(readiness["primary_out_file"])
+            self.assertTrue(readiness["merged_out_file"])
+            self.assertTrue(readiness["metadata_file"])
+            self.assertTrue(readiness["bscan_preview_file"])
             self.assertEqual(
                 manifest["gprmax_notes"]["preferred_bscan_dataset"], "/rxs/rx1/Ez"
             )

@@ -32,10 +32,13 @@ directory:
 - B-scan preview PNG when simulation was run
 - `*_metadata.json`
 - `*_manifest.json`
+- `ground_truth.yaml`
 
 The downstream primary output is always the manifest field
 `primary_out_file`. For one trace it points to `name.out`; for multi-trace
-surveys it points to `name_merged.out`.
+surveys it points to `name_merged.out`. AutoTune validation should discover the
+ground truth sidecar through
+`paths_relative_to_output_dir.ground_truth_file` in the manifest.
 
 ## Acceptance Gate
 

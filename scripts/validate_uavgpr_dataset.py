@@ -38,6 +38,29 @@ if REPO_ROOT not in sys.path:
 
 from uavgpr_manifest import MANIFEST_SCHEMA
 
+try:
+    import yaml
+except Exception:
+    yaml = None
+
+try:
+    import jsonschema
+except Exception:
+    jsonschema = None
+
+
+GROUND_TRUTH_SCHEMA = "gprmax_ground_truth_v1"
+GROUND_TRUTH_SCHEMA_PATH = os.path.join(
+    REPO_ROOT, "docs", "schemas", "gprmax_ground_truth.schema.json"
+)
+GROUND_TRUTH_METRICS = [
+    "cnr_db",
+    "background_energy",
+    "target_energy",
+    "localization_error_trace",
+    "localization_error_sample",
+]
+
 
 @dataclass
 class ValidationMessage(object):
@@ -109,6 +132,16 @@ def _resolve_path(base_dir: str, path_value: object) -> str:
 def _load_json(path: str) -> Dict[str, object]:
     with open(path, "r", encoding="utf-8") as fobj:
         return json.load(fobj)
+
+
+def _load_yaml(path: str) -> Dict[str, object]:
+    if yaml is None:
+        raise ValueError("PyYAML is required to read ground_truth.yaml")
+    with open(path, "r", encoding="utf-8") as fobj:
+        data = yaml.safe_load(fobj)
+    if not isinstance(data, dict):
+        raise ValueError("ground_truth.yaml must contain a mapping")
+    return data
 
 
 def _find_manifest(output_dir: str, manifest_path: Optional[str]) -> str:
@@ -214,6 +247,234 @@ def _check_required_paths(
     return input_path, primary_out_path
 
 
+def _same_path(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    return os.path.normcase(os.path.abspath(left)) == os.path.normcase(
+        os.path.abspath(right)
+    )
+
+
+def _ground_truth_path_from_manifest(
+    manifest: Dict[str, object], output_dir: str
+) -> str:
+    relative_paths = manifest.get("paths_relative_to_output_dir", {})
+    if isinstance(relative_paths, dict) and relative_paths.get("ground_truth_file"):
+        return _resolve_path(output_dir, relative_paths.get("ground_truth_file"))
+    if manifest.get("ground_truth_file"):
+        return _resolve_path(output_dir, manifest.get("ground_truth_file"))
+    return ""
+
+
+def _load_ground_truth_schema() -> Dict[str, object]:
+    if not os.path.exists(GROUND_TRUTH_SCHEMA_PATH):
+        raise ValueError(
+            "ground truth schema file is missing: {0}".format(
+                GROUND_TRUTH_SCHEMA_PATH
+            )
+        )
+    return _load_json(GROUND_TRUTH_SCHEMA_PATH)
+
+
+def _manual_ground_truth_schema_errors(ground_truth: Dict[str, object]) -> List[str]:
+    errors = []
+    required = [
+        "schema",
+        "dataset_id",
+        "model_file",
+        "output_file",
+        "target_roi",
+        "background_roi",
+        "target",
+        "metrics",
+    ]
+    for key in required:
+        if key not in ground_truth:
+            errors.append("ground_truth missing required field {0}".format(key))
+
+    for roi_key in ("target_roi", "background_roi"):
+        roi = ground_truth.get(roi_key)
+        if not isinstance(roi, dict):
+            errors.append("ground_truth {0} must be an object".format(roi_key))
+            continue
+        for range_key in ("trace_range", "sample_range"):
+            if range_key not in roi:
+                errors.append(
+                    "ground_truth {0}.{1} is missing".format(roi_key, range_key)
+                )
+
+    target = ground_truth.get("target")
+    if not isinstance(target, dict):
+        errors.append("ground_truth target must be an object")
+    else:
+        for key in ("type", "depth_m", "material"):
+            if key not in target:
+                errors.append("ground_truth target.{0} is missing".format(key))
+
+    metrics = ground_truth.get("metrics")
+    if not isinstance(metrics, dict):
+        errors.append("ground_truth metrics must be an object")
+    else:
+        for key in GROUND_TRUTH_METRICS:
+            if key not in metrics:
+                errors.append("ground_truth metrics.{0} is missing".format(key))
+    return errors
+
+
+def _check_ground_truth_schema(
+    messages: List[ValidationMessage], ground_truth: Dict[str, object]
+) -> None:
+    if jsonschema is not None:
+        try:
+            jsonschema.validate(ground_truth, _load_ground_truth_schema())
+        except Exception as exc:
+            _add(
+                messages,
+                "error",
+                "ground_truth schema validation failed: {0}".format(exc),
+            )
+            return
+        _add(messages, "ok", "ground_truth schema validates")
+        return
+
+    errors = _manual_ground_truth_schema_errors(ground_truth)
+    if errors:
+        for error in errors:
+            _add(messages, "error", error)
+    else:
+        _add(messages, "ok", "ground_truth required fields are present")
+
+
+def _valid_index(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _check_ground_truth_range(
+    messages: List[ValidationMessage],
+    ground_truth: Dict[str, object],
+    roi_key: str,
+    range_key: str,
+    limit: int,
+) -> None:
+    roi = ground_truth.get(roi_key)
+    value = roi.get(range_key) if isinstance(roi, dict) else None
+    label = "ground_truth {0}.{1}".format(roi_key, range_key)
+    if (
+        not isinstance(value, list)
+        or len(value) != 2
+        or not _valid_index(value[0])
+        or not _valid_index(value[1])
+        or value[0] > value[1]
+    ):
+        _add(messages, "error", "{0} is invalid".format(label))
+        return
+    if limit > 0 and value[1] >= limit:
+        axis = "trace" if range_key == "trace_range" else "sample"
+        _add(
+            messages,
+            "error",
+            "{0} exceeds Ez {1} count {2}".format(label, axis, limit),
+        )
+        return
+    _add(messages, "ok", "{0} is inside Ez shape".format(label))
+
+
+def _check_ground_truth(
+    messages: List[ValidationMessage],
+    manifest: Dict[str, object],
+    output_dir: str,
+    input_path: str,
+    primary_out_path: str,
+    samples: int,
+    traces: int,
+) -> None:
+    readiness = manifest.get("dataset_readiness")
+    readiness_ground_truth = (
+        isinstance(readiness, dict) and readiness.get("ground_truth_file") is True
+    )
+    ground_truth_path = _ground_truth_path_from_manifest(manifest, output_dir)
+    if not ground_truth_path:
+        if readiness_ground_truth:
+            _add(
+                messages,
+                "error",
+                "dataset_readiness.ground_truth_file is true but ground_truth path is missing",
+            )
+        else:
+            _add(messages, "warning", "ground_truth.yaml is not referenced by manifest")
+        return
+
+    if not os.path.exists(ground_truth_path):
+        level = "error" if readiness_ground_truth else "warning"
+        _add(messages, level, "ground_truth.yaml is missing: {0}".format(ground_truth_path))
+        return
+
+    try:
+        ground_truth = _load_yaml(ground_truth_path)
+    except Exception as exc:
+        _add(messages, "error", "ground_truth.yaml is unreadable: {0}".format(exc))
+        return
+
+    _add(messages, "ok", "ground_truth.yaml is readable: {0}".format(ground_truth_path))
+    _check_ground_truth_schema(messages, ground_truth)
+
+    if ground_truth.get("schema") == GROUND_TRUTH_SCHEMA:
+        _add(messages, "ok", "ground_truth schema is {0}".format(GROUND_TRUTH_SCHEMA))
+    else:
+        _add(
+            messages,
+            "error",
+            "ground_truth schema must be {0}".format(GROUND_TRUTH_SCHEMA),
+        )
+
+    model_path = _resolve_path(output_dir, ground_truth.get("model_file"))
+    if model_path and os.path.exists(model_path) and model_path.endswith(".in"):
+        _add(messages, "ok", "ground_truth model_file exists")
+    else:
+        _add(messages, "error", "ground_truth model_file does not point to an existing .in")
+    if input_path and model_path and not _same_path(input_path, model_path):
+        _add(messages, "error", "ground_truth model_file does not match manifest input_file")
+
+    output_path = _resolve_path(output_dir, ground_truth.get("output_file"))
+    if output_path and _same_path(output_path, primary_out_path):
+        _add(messages, "ok", "ground_truth output_file matches primary_out_file")
+    else:
+        _add(
+            messages,
+            "error",
+            "ground_truth output_file does not match manifest primary_out_file",
+        )
+
+    for roi_key in ("target_roi", "background_roi"):
+        _check_ground_truth_range(messages, ground_truth, roi_key, "trace_range", traces)
+        _check_ground_truth_range(
+            messages, ground_truth, roi_key, "sample_range", samples
+        )
+
+    target = ground_truth.get("target")
+    if isinstance(target, dict) and target.get("type") and target.get("material") and (
+        "depth_m" in target
+    ):
+        _add(messages, "ok", "ground_truth target fields are present")
+    else:
+        _add(messages, "error", "ground_truth target.type/depth_m/material are required")
+
+    metrics = ground_truth.get("metrics")
+    missing_metrics = []
+    if isinstance(metrics, dict):
+        missing_metrics = [key for key in GROUND_TRUTH_METRICS if key not in metrics]
+    else:
+        missing_metrics = list(GROUND_TRUTH_METRICS)
+    if missing_metrics:
+        _add(
+            messages,
+            "error",
+            "ground_truth metrics missing: {0}".format(", ".join(missing_metrics)),
+        )
+    else:
+        _add(messages, "ok", "ground_truth metrics contract is present")
+
+
 def _check_manifest_summary(
     messages: List[ValidationMessage],
     manifest: Dict[str, object],
@@ -266,20 +527,23 @@ def _check_hdf5(
     primary_out_path: str,
     component: str,
     rx_name: str,
-) -> None:
+) -> Tuple[int, int]:
     if not primary_out_path or not os.path.exists(primary_out_path):
-        return
+        return 0, 0
 
     dataset_path = "/rxs/{0}/{1}".format(rx_name, component)
     positions = None
+    samples = 0
+    trace_count = 0
     with h5py.File(primary_out_path, "r") as fobj:
         attrs = {key: _json_attr(fobj.attrs[key]) for key in fobj.attrs}
         if dataset_path not in fobj:
             _add(messages, "error", "{0} is missing".format(dataset_path))
-            return
+            return 0, 0
 
         data = fobj[dataset_path]
         datasets = {component: list(data.shape)}
+        samples = int(data.shape[0]) if data.shape else 0
         iterations = int(attrs.get("Iterations", data.shape[0]))
         if data.ndim not in (1, 2):
             _add(messages, "error", "{0} must be 1D or 2D".format(dataset_path))
@@ -341,6 +605,7 @@ def _check_hdf5(
                 )
             else:
                 _add(messages, "ok", "target is inside scan midpoint coverage")
+    return samples, trace_count
 
 
 def validate_dataset(
@@ -377,8 +642,19 @@ def validate_dataset(
         _add(messages, "warning", "metadata JSON was not found; target coverage is limited")
 
     component = str(manifest.get("component", component) or component)
-    _, primary_out_path = _check_required_paths(messages, manifest, output_dir)
-    _check_hdf5(messages, manifest, metadata, primary_out_path, component, rx_name)
+    input_path, primary_out_path = _check_required_paths(messages, manifest, output_dir)
+    samples, traces = _check_hdf5(
+        messages, manifest, metadata, primary_out_path, component, rx_name
+    )
+    _check_ground_truth(
+        messages,
+        manifest,
+        output_dir,
+        input_path,
+        primary_out_path,
+        samples,
+        traces,
+    )
 
     return ValidationResult(output_dir, manifest_path, messages)
 

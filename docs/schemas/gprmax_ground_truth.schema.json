@@ -70,6 +70,22 @@
         }
       }
     },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "auto_generated": {
+          "type": "boolean"
+        },
+        "roi_review_required": {
+          "type": "boolean"
+        },
+        "roi_method": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "metrics": {
       "type": "object",
       "additionalProperties": {

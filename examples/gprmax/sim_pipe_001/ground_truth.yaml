@@ -22,6 +22,11 @@ target:
   radius_m: 0.035
   notes: Single PEC cylinder in uniform dry soil for AutoTune validation.
 
+metadata:
+  auto_generated: true
+  roi_review_required: true
+  roi_method: geometric_twt_estimate
+
 metrics:
   cnr_db: null
   background_energy: null

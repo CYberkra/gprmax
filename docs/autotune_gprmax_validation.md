@@ -54,6 +54,15 @@ truth.
 - `target.material`: target material name, for example `pec`.
 - `metrics`: metric contract for AutoTune evaluation.
 
+For generated single-target baselines, `target.depth_m` is calculated as:
+
+```text
+ground_surface_y - target_center_y
+```
+
+This is a geometric depth below the model ground surface, not a picked B-scan
+arrival time.
+
 ## ROI Convention
 
 Trace and sample ranges are zero-based and inclusive:
@@ -67,6 +76,22 @@ target_roi:
 The first value must be less than or equal to the second value. Validation code
 should clip or reject ranges outside the loaded B-scan shape rather than
 silently wrapping indices.
+
+Automatically generated ROI ranges are initial estimates. The current GUI uses
+the known target geometry, host velocity, source/receiver offset, and expected
+two-way travel time to write:
+
+```yaml
+metadata:
+  auto_generated: true
+  roi_review_required: true
+  roi_method: geometric_twt_estimate
+```
+
+Before paper experiments, those ROI ranges should be reviewed by a human or by
+a dedicated ROI-review script. MyGPR AutoTune may use them as initial target
+and background windows, but Evidence/report artifacts should record the ROI
+source and whether it was reviewed or adjusted.
 
 ## Metric Contract
 

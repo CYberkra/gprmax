@@ -23,7 +23,9 @@ import unittest
 
 import h5py
 import numpy as np
+import yaml
 
+from scripts.validate_uavgpr_dataset import main as validator_main
 from scripts.validate_uavgpr_dataset import validate_dataset
 
 
@@ -34,6 +36,7 @@ class TestValidateUavGprDataset(unittest.TestCase):
         out_path = os.path.join(root, "case_merged.out")
         metadata_path = os.path.join(root, "case_metadata.json")
         manifest_path = os.path.join(root, "case_manifest.json")
+        ground_truth_path = os.path.join(root, "ground_truth.yaml")
 
         with open(input_path, "w", encoding="utf-8") as fobj:
             fobj.write("#title: validator test\n")
@@ -71,6 +74,43 @@ class TestValidateUavGprDataset(unittest.TestCase):
         with open(metadata_path, "w", encoding="utf-8") as fobj:
             json.dump(metadata, fobj)
 
+        ground_truth = {
+            "schema": "gprmax_ground_truth_v1",
+            "dataset_id": "case",
+            "model_file": "case.in",
+            "output_file": "case_merged.out",
+            "target_roi": {
+                "trace_range": [0, 1],
+                "sample_range": [0, 2],
+            },
+            "background_roi": {
+                "trace_range": [0, 1],
+                "sample_range": [0, 2],
+            },
+            "target": {
+                "type": "pipe",
+                "depth_m": 0.10,
+                "material": "pec",
+                "center_x_m": 0.175,
+                "center_y_m": 0.080,
+                "radius_m": 0.010,
+            },
+            "metadata": {
+                "auto_generated": True,
+                "roi_review_required": True,
+                "roi_method": "geometric_twt_estimate",
+            },
+            "metrics": {
+                "cnr_db": None,
+                "background_energy": None,
+                "target_energy": None,
+                "localization_error_trace": None,
+                "localization_error_sample": None,
+            },
+        }
+        with open(ground_truth_path, "w", encoding="utf-8") as fobj:
+            yaml.safe_dump(ground_truth, fobj, sort_keys=False)
+
         if summary_positions_shape is None:
             summary_positions_shape = [2, 3]
         manifest = {
@@ -84,8 +124,12 @@ class TestValidateUavGprDataset(unittest.TestCase):
                 "primary_out_file": True,
                 "merged_out_file": True,
                 "metadata_file": True,
+                "ground_truth_file": True,
                 "bscan_preview_file": False,
                 "background_preview_files": False,
+            },
+            "paths_relative_to_output_dir": {
+                "ground_truth_file": "ground_truth.yaml",
             },
             "primary_out_summary": {
                 "attrs": {
@@ -110,6 +154,14 @@ class TestValidateUavGprDataset(unittest.TestCase):
             json.dump(manifest, fobj)
         return manifest_path
 
+    def read_ground_truth(self, root):
+        with open(os.path.join(root, "ground_truth.yaml"), "r", encoding="utf-8") as fobj:
+            return yaml.safe_load(fobj)
+
+    def write_ground_truth(self, root, ground_truth):
+        with open(os.path.join(root, "ground_truth.yaml"), "w", encoding="utf-8") as fobj:
+            yaml.safe_dump(ground_truth, fobj, sort_keys=False)
+
     def test_valid_dataset_passes_contract_checks(self):
         with tempfile.TemporaryDirectory() as root:
             self.write_dataset(root)
@@ -118,6 +170,69 @@ class TestValidateUavGprDataset(unittest.TestCase):
 
             self.assertFalse(
                 result.has_errors(),
+                "\n".join(message.text for message in result.errors()),
+            )
+
+    def test_missing_ground_truth_is_reported_when_readiness_is_true(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.write_dataset(root)
+            os.remove(os.path.join(root, "ground_truth.yaml"))
+
+            result = validate_dataset(root)
+
+            self.assertTrue(result.has_errors())
+            self.assertIn(
+                "ground_truth.yaml is missing",
+                "\n".join(message.text for message in result.errors()),
+            )
+            self.assertEqual(validator_main([root]), 1)
+
+    def test_ground_truth_roi_out_of_bounds_is_reported(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.write_dataset(root)
+            ground_truth = self.read_ground_truth(root)
+            ground_truth["target_roi"]["sample_range"] = [0, 3]
+            self.write_ground_truth(root, ground_truth)
+
+            result = validate_dataset(root)
+
+            self.assertTrue(result.has_errors())
+            self.assertIn(
+                "ground_truth target_roi.sample_range exceeds Ez sample count 3",
+                "\n".join(message.text for message in result.errors()),
+            )
+
+    def test_ground_truth_output_file_must_match_primary_out(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.write_dataset(root)
+            ground_truth = self.read_ground_truth(root)
+            ground_truth["output_file"] = "other_merged.out"
+            self.write_ground_truth(root, ground_truth)
+
+            result = validate_dataset(root)
+
+            self.assertTrue(result.has_errors())
+            self.assertIn(
+                "ground_truth output_file does not match manifest primary_out_file",
+                "\n".join(message.text for message in result.errors()),
+            )
+
+    def test_ground_truth_missing_schema_field_is_reported(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.write_dataset(root)
+            ground_truth = self.read_ground_truth(root)
+            ground_truth["metrics"].pop("cnr_db")
+            self.write_ground_truth(root, ground_truth)
+
+            result = validate_dataset(root)
+
+            self.assertTrue(result.has_errors())
+            self.assertIn(
+                "ground_truth",
+                "\n".join(message.text for message in result.errors()),
+            )
+            self.assertIn(
+                "cnr_db",
                 "\n".join(message.text for message in result.errors()),
             )
 

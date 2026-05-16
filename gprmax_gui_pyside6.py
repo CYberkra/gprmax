@@ -2178,14 +2178,14 @@ class GprMaxRunner(object):
             artifacts.primary_out_path = single_path
             self.log("单道 A-scan 输出文件: {0}".format(single_path))
 
-        data, dt = self.load_merged_bscan(artifacts.primary_out_path)
+        data, dt, x_axis_m = self.load_bscan_with_axes(artifacts.primary_out_path)
         bscan_png = os.path.join(
             artifacts.output_dir,
             "{0}_bscan.png".format(
                 os.path.splitext(os.path.basename(artifacts.input_path))[0]
             ),
         )
-        figure = create_bscan_figure(data, dt)
+        figure = create_bscan_figure(data, dt, x_axis_m=x_axis_m)
         figure.savefig(bscan_png, dpi=160, bbox_inches="tight")
         artifacts.bscan_png_path = bscan_png
 
@@ -2200,6 +2200,7 @@ class GprMaxRunner(object):
             background_removed,
             dt,
             title="背景抑制 Ez B-scan",
+            x_axis_m=x_axis_m,
         )
         figure.savefig(background_removed_png, dpi=160, bbox_inches="tight")
         artifacts.background_removed_png_path = background_removed_png
@@ -2215,6 +2216,7 @@ class GprMaxRunner(object):
             gained,
             dt,
             title="背景抑制 + 温和时间增益 Ez B-scan",
+            x_axis_m=x_axis_m,
         )
         figure.savefig(background_removed_gain_png, dpi=160, bbox_inches="tight")
         artifacts.background_removed_gain_png_path = background_removed_gain_png
@@ -2550,12 +2552,32 @@ class GprMaxRunner(object):
         return path
 
     def load_merged_bscan(self, merged_path: str) -> Tuple[np.ndarray, float]:
+        data, dt, _ = self.load_bscan_with_axes(merged_path)
+        return data, dt
+
+    def load_bscan_with_axes(
+        self, merged_path: str
+    ) -> Tuple[np.ndarray, float, Optional[np.ndarray]]:
         with h5py.File(merged_path, "r") as fobj:
             dt = float(fobj.attrs["dt"])
-            data = np.array(fobj["/rxs/rx1/Ez"][:], dtype=np.float32)
+            rxgroup = fobj["/rxs/rx1"]
+            data = np.array(rxgroup["Ez"][:], dtype=np.float32)
+            x_axis_m = None
+            if "Positions" in rxgroup:
+                positions = np.asarray(rxgroup["Positions"][:], dtype=np.float64)
+                if positions.ndim == 2 and positions.shape[1] >= 1:
+                    x_axis_m = positions[:, 0]
+            elif "Position" in rxgroup.attrs:
+                position = np.asarray(rxgroup.attrs["Position"], dtype=np.float64)
+                if position.size >= 1:
+                    x_axis_m = np.asarray([position[0]], dtype=np.float64)
         if data.ndim == 1:
             data = data[:, np.newaxis]
-        return data, dt
+        if x_axis_m is not None and len(x_axis_m) != data.shape[1]:
+            x_axis_m = None
+        if x_axis_m is None:
+            return data, dt, None
+        return data, dt, np.asarray(x_axis_m, dtype=np.float64)
 
 
 def remove_horizontal_background(data: np.ndarray) -> np.ndarray:
@@ -2576,23 +2598,36 @@ def apply_mild_time_gain(data: np.ndarray, dt: float) -> np.ndarray:
 
 
 def create_bscan_figure(
-    data: np.ndarray, dt: float, title: str = "原始 Ez B-scan"
+    data: np.ndarray,
+    dt: float,
+    title: str = "原始 Ez B-scan",
+    x_axis_m: Optional[np.ndarray] = None,
 ) -> Figure:
     figure = Figure(figsize=(9, 5.4), dpi=120)
     ax = figure.add_subplot(111)
     vmax = np.percentile(np.abs(data), 99.5)
     if vmax <= 0:
         vmax = 1.0
+    if x_axis_m is not None and len(x_axis_m) == data.shape[1]:
+        x_values = np.asarray(x_axis_m, dtype=np.float64)
+        if len(x_values) == 1:
+            extent_x = [float(x_values[0]) - 0.5, float(x_values[0]) + 0.5]
+        else:
+            extent_x = [float(x_values[0]), float(x_values[-1])]
+        x_label = "距离 x [m]"
+    else:
+        extent_x = [0, data.shape[1]]
+        x_label = "道号"
     image = ax.imshow(
         data,
-        extent=[0, data.shape[1], data.shape[0] * dt * 1e9, 0],
+        extent=[extent_x[0], extent_x[1], data.shape[0] * dt * 1e9, 0],
         interpolation="nearest",
         aspect="auto",
         cmap="seismic",
         vmin=-vmax,
         vmax=vmax,
     )
-    ax.set_xlabel("道号")
+    ax.set_xlabel(x_label)
     ax.set_ylabel("时间 [ns]")
     ax.set_title(title)
     ax.grid(True, linestyle=":", linewidth=0.4, alpha=0.4)
@@ -2625,7 +2660,7 @@ class RunnerThread(QtCore.QThread):
     preview_ready = QtCore.Signal(str)
     input_ready = QtCore.Signal(str)
     audit_ready = QtCore.Signal(str)
-    bscan_ready = QtCore.Signal(object, float)
+    bscan_ready = QtCore.Signal(object, float, object)
     success = QtCore.Signal(str, object)
     failure = QtCore.Signal(str)
 
@@ -2672,8 +2707,10 @@ class RunnerThread(QtCore.QThread):
             artifacts = self.runner.run(self.config, artifacts)
 
             if artifacts.primary_out_path:
-                data, dt = self.runner.load_merged_bscan(artifacts.primary_out_path)
-                self.bscan_ready.emit(data, dt)
+                data, dt, x_axis_m = self.runner.load_bscan_with_axes(
+                    artifacts.primary_out_path
+                )
+                self.bscan_ready.emit(data, dt, x_axis_m)
 
             self.progress.emit(100, "仿真完成")
             self.success.emit("仿真与合并已完成。", artifacts)
@@ -2748,6 +2785,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_processing_report_path = ""
         self.current_bscan_data = None
         self.current_bscan_dt = None
+        self.current_bscan_x_axis_m = None
         self.advanced_widgets = []
         self.builder = ScenarioBuilder()
         self.auditor = PhysicsAuditor()
@@ -2868,9 +2906,15 @@ class MainWindow(QtWidgets.QMainWindow):
         right_layout.addWidget(self.tabs, 1)
 
         self.geometry_canvas = PlotCanvas()
+        self.bscan_tabs = QtWidgets.QTabWidget()
         self.bscan_canvas = PlotCanvas()
+        self.background_canvas = PlotCanvas()
+        self.background_gain_canvas = PlotCanvas()
+        self.bscan_tabs.addTab(self.bscan_canvas, "Raw")
+        self.bscan_tabs.addTab(self.background_canvas, "背景抑制")
+        self.bscan_tabs.addTab(self.background_gain_canvas, "温和增益")
         self.tabs.addTab(self.geometry_canvas, "几何预览")
-        self.tabs.addTab(self.bscan_canvas, "B-scan")
+        self.tabs.addTab(self.bscan_tabs, "B-scan")
 
         self.input_view = QtWidgets.QPlainTextEdit()
         self.input_view.setReadOnly(True)
@@ -3714,12 +3758,32 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:
             self.log(traceback.format_exc())
 
-    def on_bscan_ready(self, data: np.ndarray, dt: float) -> None:
+    def on_bscan_ready(
+        self, data: np.ndarray, dt: float, x_axis_m: Optional[np.ndarray] = None
+    ) -> None:
         self.current_bscan_data = data
         self.current_bscan_dt = dt
-        figure = create_bscan_figure(data, dt)
+        self.current_bscan_x_axis_m = x_axis_m
+        figure = create_bscan_figure(data, dt, x_axis_m=x_axis_m)
         self.bscan_canvas.replace_figure(figure)
-        self.tabs.setCurrentWidget(self.bscan_canvas)
+        background_removed = remove_horizontal_background(data)
+        figure = create_bscan_figure(
+            background_removed,
+            dt,
+            title="背景抑制 Ez B-scan",
+            x_axis_m=x_axis_m,
+        )
+        self.background_canvas.replace_figure(figure)
+        gained = apply_mild_time_gain(background_removed, dt)
+        figure = create_bscan_figure(
+            gained,
+            dt,
+            title="背景抑制 + 温和时间增益 Ez B-scan",
+            x_axis_m=x_axis_m,
+        )
+        self.background_gain_canvas.replace_figure(figure)
+        self.tabs.setCurrentWidget(self.bscan_tabs)
+        self.bscan_tabs.setCurrentWidget(self.bscan_canvas)
 
     def on_success(self, message: str, artifacts: BuildArtifacts) -> None:
         self.current_artifacts = artifacts

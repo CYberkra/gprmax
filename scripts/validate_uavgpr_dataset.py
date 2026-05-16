@@ -32,6 +32,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import h5py
 import numpy as np
 
+from uavgpr_manifest import MANIFEST_SCHEMA
+
 
 @dataclass
 class ValidationMessage(object):
@@ -351,10 +353,10 @@ def validate_dataset(
 
     manifest = _load_json(manifest_path)
     _add(messages, "ok", "manifest exists: {0}".format(manifest_path))
-    if manifest.get("schema") == "uavgpr_manifest_v1":
-        _add(messages, "ok", "manifest schema is uavgpr_manifest_v1")
+    if manifest.get("schema") == MANIFEST_SCHEMA:
+        _add(messages, "ok", "manifest schema is {0}".format(MANIFEST_SCHEMA))
     else:
-        _add(messages, "error", "manifest schema must be uavgpr_manifest_v1")
+        _add(messages, "error", "manifest schema must be {0}".format(MANIFEST_SCHEMA))
 
     readiness = manifest.get("dataset_readiness")
     if not isinstance(readiness, dict):

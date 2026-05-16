@@ -53,6 +53,7 @@ from matplotlib.patches import Circle, Polygon, Rectangle
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from tools.outputfiles_merge import merge_files
+from uavgpr_manifest import MANIFEST_SCHEMA
 
 
 matplotlib.rcParams["font.sans-serif"] = [
@@ -2462,7 +2463,7 @@ class GprMaxRunner(object):
             if value
         ]
         manifest = {
-            "schema": "uavgpr_manifest_v1",
+            "schema": MANIFEST_SCHEMA,
             "created_at": datetime.now().isoformat(),
             "app": "{0} {1}".format(APP_TITLE, APP_VERSION),
             "input_file": artifacts.input_path,

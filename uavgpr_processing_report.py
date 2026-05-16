@@ -34,6 +34,8 @@ import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
+from uavgpr_manifest import PROCESSING_REPORT_SCHEMA
+
 
 C0 = 299792458.0
 DEFAULT_MYGPR_ROOT = r"D:\MyGPR"
@@ -90,7 +92,7 @@ def run_processing_report(
 
     best = bridge_summary.get("recommended") or {}
     summary = {
-        "schema": "uavgpr_processing_report_v1",
+        "schema": PROCESSING_REPORT_SCHEMA,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "manifest_path": str(manifest_file),
         "mygpr_root": str(root),

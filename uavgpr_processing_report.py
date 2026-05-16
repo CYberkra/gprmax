@@ -66,7 +66,7 @@ def run_processing_report(
         manifest = json.load(fobj)
 
     root = Path(mygpr_root or os.environ.get("MYGPR_ROOT") or DEFAULT_MYGPR_ROOT)
-    run_processing_method = _load_mygpr_processing_engine(root)
+    run_bridge = _load_mygpr_report_bridge(root)
     data, dt = _load_bscan(manifest)
     report_dir = Path(output_dir) if output_dir else manifest_file.parent / "processing_report"
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -74,71 +74,35 @@ def run_processing_report(
     raw_png = report_dir / "raw_bscan.png"
     _save_bscan_png(data, dt, raw_png, "Raw Ez B-scan")
 
-    target_roi = _estimate_target_roi(manifest, data.shape, dt)
-    candidates = _build_candidates(data.shape[1])
+    bridge_summary = run_bridge(data, dt, manifest)
     results = []
-    raw_metrics = _metric_context(data, target_roi)
 
-    for candidate in candidates:
-        _log(log_callback, "Processing {0}".format(candidate.candidate_id))
-        result = _run_candidate(
-            data,
-            candidate,
-            run_processing_method,
-            dt=dt,
-            total_time_ns=float(data.shape[0]) * float(dt) * 1.0e9,
-        )
-        score = _score_result(data, result["data"], target_roi, raw_metrics)
-        adjusted = _maybe_adjust_candidate(candidate, score)
-        if adjusted is not None:
-            _log(
-                log_callback,
-                "Feedback rerun {0}: {1}".format(
-                    adjusted.candidate_id, adjusted.rerun_reason
-                ),
-            )
-            result = _run_candidate(
-                data,
-                adjusted,
-                run_processing_method,
-                dt=dt,
-                total_time_ns=float(data.shape[0]) * float(dt) * 1.0e9,
-            )
-            score = _score_result(data, result["data"], target_roi, raw_metrics)
-            candidate = adjusted
-
-        image_name = "{0}.png".format(candidate.candidate_id)
+    for record in bridge_summary.get("candidates", []):
+        record = dict(record)
+        candidate_id = str(record.get("candidate_id", "candidate"))
+        _log(log_callback, "Processing {0}".format(candidate_id))
+        processed_data = np.asarray(record.pop("processed_data"), dtype=np.float32)
+        image_name = "{0}.png".format(candidate_id)
         image_path = report_dir / image_name
-        _save_bscan_png(result["data"], dt, image_path, candidate.candidate_id)
-        record = {
-            "candidate_id": candidate.candidate_id,
-            "background": {
-                "method": candidate.background_id,
-                "params": _json_safe(candidate.background_params),
-            },
-            "gain": {
-                "method": candidate.gain_id,
-                "params": _json_safe(candidate.gain_params),
-            },
-            "rerun_reason": candidate.rerun_reason,
-            "score": _json_safe(score),
-            "image": image_name,
-            "method_metadata": _json_safe(result["metadata"]),
-        }
+        _save_bscan_png(processed_data, dt, image_path, candidate_id)
+        record["image"] = image_name
         results.append(record)
 
-    best = _choose_best(results)
+    best = bridge_summary.get("recommended") or {}
     summary = {
         "schema": "uavgpr_processing_report_v1",
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "manifest_path": str(manifest_file),
         "mygpr_root": str(root),
+        "mygpr_bridge_schema": bridge_summary.get("schema"),
         "primary_out_file": manifest.get("primary_out_file"),
         "raw_is_unchanged": True,
         "preview_processing_only": True,
         "data_shape": [int(data.shape[0]), int(data.shape[1])],
         "dt_s": float(dt),
-        "target_roi": _json_safe(target_roi),
+        "warnings": _json_safe(bridge_summary.get("warnings", [])),
+        "target_rois": _json_safe(bridge_summary.get("target_rois", [])),
+        "target_roi": _json_safe(bridge_summary.get("target_roi", {})),
         "raw_image": raw_png.name,
         "candidates": results,
         "recommended": best,
@@ -156,15 +120,15 @@ def run_processing_report(
     return summary
 
 
-def _load_mygpr_processing_engine(root: Path) -> Callable[[np.ndarray, str, Dict[str, Any]], Tuple[np.ndarray, Dict[str, Any]]]:
+def _load_mygpr_report_bridge(root: Path) -> Callable[[np.ndarray, float, Dict[str, Any]], Dict[str, Any]]:
     if not root.exists():
         raise FileNotFoundError("MyGPR root not found: {0}".format(root))
     root_text = str(root)
     if root_text not in sys.path:
         sys.path.insert(0, root_text)
-    from core.processing_engine import run_processing_method
+    from core.gprmax_report_bridge import run_gprmax_report_bridge
 
-    return run_processing_method
+    return run_gprmax_report_bridge
 
 
 def _load_bscan(manifest: Dict[str, Any]) -> Tuple[np.ndarray, float]:

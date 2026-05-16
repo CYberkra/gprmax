@@ -2980,8 +2980,9 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(group)
 
     def _build_domain_group(self, layout: QtWidgets.QVBoxLayout) -> None:
-        group = QtWidgets.QGroupBox("计算域 / 宿主介质")
+        group = QtWidgets.QGroupBox("场景")
         form = QtWidgets.QFormLayout(group)
+        self.scene_form = form
         self.domain_x_spin = self._double_spin(0.02, 20.0, 0.240, 3, 0.001)
         self.domain_y_spin = self._double_spin(0.02, 20.0, 0.210, 3, 0.001)
         self.dx_spin = self._double_spin(0.0005, 0.05, 0.002, 4, 0.0005)
@@ -3006,9 +3007,6 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def _build_material_group(self, layout: QtWidgets.QVBoxLayout) -> None:
-        group = QtWidgets.QGroupBox("材料")
-        form = QtWidgets.QFormLayout(group)
-
         self.host_preset_combo = QtWidgets.QComboBox()
         for key in HOST_PRESETS:
             self.host_preset_combo.addItem(key, key)
@@ -3016,36 +3014,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.host_name_edit = QtWidgets.QLineEdit("half_space")
         self.host_eps_spin = self._double_spin(1.0, 100.0, 6.0, 3, 0.1)
         self.host_sigma_spin = self._double_spin(0.0, 10.0, 0.0, 6, 0.0001)
-
-        self.target_preset_combo = QtWidgets.QComboBox()
-        for key in TARGET_PRESETS:
-            self.target_preset_combo.addItem(key, key)
-        self.target_preset_combo.currentIndexChanged.connect(
-            self._on_target_preset_changed
-        )
-        self.target_name_edit = QtWidgets.QLineEdit("pec")
-        self.target_eps_spin = self._double_spin(1.0, 100.0, 9.0, 3, 0.1)
-        self.target_sigma_spin = self._double_spin(0.0, 10.0, 0.0, 6, 0.0001)
-
-        form.addRow("宿主预设", self.host_preset_combo)
-        form.addRow("宿主名称", self.host_name_edit)
-        form.addRow("宿主 eps_r", self.host_eps_spin)
-        form.addRow("宿主 sigma (S/m)", self.host_sigma_spin)
-        form.addRow(self._hline())
-        form.addRow("目标预设", self.target_preset_combo)
-        form.addRow("目标名称", self.target_name_edit)
-        form.addRow("目标 eps_r", self.target_eps_spin)
-        form.addRow("目标 sigma (S/m)", self.target_sigma_spin)
-        layout.addWidget(group)
+        self.scene_form.addRow("宿主预设", self.host_preset_combo)
+        self.scene_form.addRow("宿主 eps_r", self.host_eps_spin)
+        self.scene_form.addRow("宿主 sigma (S/m)", self.host_sigma_spin)
+        self.scene_form.addRow("宿主名称", self.host_name_edit)
         self._register_advanced_widgets(
             self.host_name_edit,
-            self.target_name_edit,
-            self.target_eps_spin,
-            self.target_sigma_spin,
         )
 
     def _build_survey_group(self, layout: QtWidgets.QVBoxLayout) -> None:
-        group = QtWidgets.QGroupBox("测线参数")
+        group = QtWidgets.QGroupBox("测线")
         form = QtWidgets.QFormLayout(group)
         self.source_start_x_spin = self._double_spin(0.0, 20.0, 0.040, 3, 0.001)
         self.receiver_offset_spin = self._double_spin(0.0, 5.0, 0.040, 3, 0.001)
@@ -3131,7 +3109,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
 
     def _build_target_group(self, layout: QtWidgets.QVBoxLayout) -> None:
-        group = QtWidgets.QGroupBox("目标体")
+        group = QtWidgets.QGroupBox("异常体")
         form = QtWidgets.QFormLayout(group)
         self.target_form = form
         self.target_shape_combo = QtWidgets.QComboBox()
@@ -3139,6 +3117,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.target_shape_combo.currentIndexChanged.connect(
             self._update_target_controls
         )
+        self.target_preset_combo = QtWidgets.QComboBox()
+        for key in TARGET_PRESETS:
+            self.target_preset_combo.addItem(key, key)
+        self.target_preset_combo.currentIndexChanged.connect(
+            self._on_target_preset_changed
+        )
+        self.target_name_edit = QtWidgets.QLineEdit("pec")
+        self.target_eps_spin = self._double_spin(1.0, 100.0, 9.0, 3, 0.1)
+        self.target_sigma_spin = self._double_spin(0.0, 10.0, 0.0, 6, 0.0001)
         self.target_orientation_combo = QtWidgets.QComboBox()
         self.target_orientation_combo.addItems(["horizontal", "vertical", "angled"])
         self.target_orientation_combo.currentIndexChanged.connect(
@@ -3167,6 +3154,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.target_hint_label.setWordWrap(True)
         self.target_hint_label.setStyleSheet("color:#94a3b8;")
         form.addRow("形状", self.target_shape_combo)
+        form.addRow("目标预设", self.target_preset_combo)
+        form.addRow("目标名称", self.target_name_edit)
+        form.addRow("目标 eps_r", self.target_eps_spin)
+        form.addRow("目标 sigma (S/m)", self.target_sigma_spin)
         form.addRow("", self.use_curved_crack_check)
         form.addRow("裂缝方向", self.target_orientation_combo)
         form.addRow("裂缝倾角 (deg)", self.target_angle_spin)
@@ -3184,6 +3175,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.target_angle_spin,
             self.crack_path_edit,
             self.curved_crack_example_button,
+            self.target_name_edit,
+            self.target_eps_spin,
+            self.target_sigma_spin,
         )
 
         self.target2_enabled_check = QtWidgets.QCheckBox("启用第二异常体")
@@ -3225,8 +3219,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_target2_controls()
 
     def _build_runtime_group(self, layout: QtWidgets.QVBoxLayout) -> None:
-        group = QtWidgets.QGroupBox("运行设置")
+        group = QtWidgets.QGroupBox("运行与结果")
         form = QtWidgets.QFormLayout(group)
+        self.runtime_form = form
         self.python_edit = QtWidgets.QLineEdit(DEFAULT_PYTHON)
         self.use_gpu_check = QtWidgets.QCheckBox("尝试使用 GPU（可用时）")
         self.use_gpu_check.setChecked(False)
@@ -3308,8 +3303,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._bind_refresh(widget)
 
     def _build_processing_group(self, layout: QtWidgets.QVBoxLayout) -> None:
-        group = QtWidgets.QGroupBox("MyGPR 处理报告")
-        form = QtWidgets.QFormLayout(group)
+        form = self.runtime_form
         self.mygpr_root_edit = QtWidgets.QLineEdit(DEFAULT_MYGPR_ROOT)
         browse = QtWidgets.QPushButton("浏览")
         browse.clicked.connect(self.on_browse_mygpr_root)
@@ -3349,7 +3343,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.processing_report_label.setWordWrap(True)
         self.processing_report_label.setStyleSheet("color:#94a3b8;")
         form.addRow("", self.processing_report_label)
-        layout.addWidget(group)
 
     def _register_advanced_widgets(self, *widgets: QtWidgets.QWidget) -> None:
         self.advanced_widgets.extend(widgets)

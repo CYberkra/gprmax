@@ -44,16 +44,35 @@ class TestUavGprGuiUiState(unittest.TestCase):
             self.assertFalse(window.advanced_options_check.isChecked())
             self.assertFalse(window.use_gpu_check.isChecked())
 
+            visible_groups = [
+                group.title()
+                for group in window.findChildren(QtWidgets.QGroupBox)
+                if not group.isHidden()
+            ]
+            self.assertEqual(
+                visible_groups,
+                [
+                    "输出",
+                    "场景",
+                    "测线",
+                    "异常体",
+                    "运行与结果",
+                ],
+            )
+
             self.assertTrue(window.source_group.isHidden())
             self.assertTrue(window.domain_x_spin.isHidden())
             self.assertTrue(window.dx_spin.isHidden())
             self.assertTrue(window.python_edit.isHidden())
             self.assertTrue(window.geometry_only_check.isHidden())
+            self.assertTrue(window.host_name_edit.isHidden())
+            self.assertTrue(window.target_name_edit.isHidden())
 
             self.assertFalse(window.ground_surface_y_spin.isHidden())
             self.assertFalse(window.lift_off_spin.isHidden())
             self.assertFalse(window.host_eps_spin.isHidden())
             self.assertFalse(window.host_sigma_spin.isHidden())
+            self.assertFalse(window.target_preset_combo.isHidden())
             self.assertFalse(window.validate_dataset_button.isHidden())
             self.assertFalse(window.processing_report_button.isHidden())
             self.assertFalse(window.validate_dataset_button.isEnabled())

@@ -18,6 +18,11 @@ The schema is versioned separately from the GUI manifest:
 docs/schemas/gprmax_ground_truth.schema.json
 ```
 
+The PySide6 UavGPR runner writes `ground_truth.yaml` into each generated output
+directory after the primary `.out` or `_merged.out` file is available. The GUI
+manifest includes `paths_relative_to_output_dir.ground_truth_file` so downstream
+AutoTune validation can discover this sidecar without guessing filenames.
+
 ## Scope
 
 This format is for AutoTune paper validation and benchmark reporting. It should

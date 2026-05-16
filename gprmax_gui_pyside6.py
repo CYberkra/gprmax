@@ -936,6 +936,7 @@ class BuildArtifacts:
     preview_path: str
     metadata_path: str
     manifest_path: str = ""
+    ground_truth_path: str = ""
     primary_out_path: str = ""
     merged_out_path: str = ""
     bscan_png_path: str = ""
@@ -1657,6 +1658,7 @@ class ScenarioBuilder(object):
         manifest_path = os.path.join(
             output_dir, "{0}_manifest.json".format(config.output_name)
         )
+        ground_truth_path = os.path.join(output_dir, "ground_truth.yaml")
 
         input_text = self.build_input_text(config)
         with open(input_path, "w", encoding="utf-8") as fobj:
@@ -1684,6 +1686,7 @@ class ScenarioBuilder(object):
             preview_path=preview_path,
             metadata_path=metadata_path,
             manifest_path=manifest_path,
+            ground_truth_path=ground_truth_path,
             geometry_view_path=os.path.join(
                 output_dir, "{0}_geometry.vti".format(config.output_name)
             ),
@@ -2438,12 +2441,15 @@ class GprMaxRunner(object):
         if not artifacts.manifest_path:
             return
 
+        self._write_ground_truth(config, artifacts)
+
         scan_start_mid_x = config.source_start_x + 0.5 * config.receiver_offset
         scan_end_mid_x = config.source_end_x + 0.5 * config.receiver_offset
         output_dir = os.path.abspath(artifacts.output_dir)
         path_fields = {
             "input_file": artifacts.input_path,
             "metadata_file": artifacts.metadata_path,
+            "ground_truth_file": artifacts.ground_truth_path,
             "preview_file": artifacts.preview_path,
             "primary_out_file": artifacts.primary_out_path,
             "merged_out_file": artifacts.merged_out_path,
@@ -2489,6 +2495,10 @@ class GprMaxRunner(object):
                 ),
                 "metadata_file": bool(
                     artifacts.metadata_path and os.path.exists(artifacts.metadata_path)
+                ),
+                "ground_truth_file": bool(
+                    artifacts.ground_truth_path
+                    and os.path.exists(artifacts.ground_truth_path)
                 ),
                 "bscan_preview_file": bool(
                     artifacts.bscan_png_path and os.path.exists(artifacts.bscan_png_path)
@@ -2540,6 +2550,165 @@ class GprMaxRunner(object):
         }
         with open(artifacts.manifest_path, "w", encoding="utf-8") as fobj:
             json.dump(manifest, fobj, ensure_ascii=False, indent=2)
+
+    def _write_ground_truth(
+        self, config: SimulationConfig, artifacts: BuildArtifacts
+    ) -> None:
+        if not artifacts.ground_truth_path:
+            return
+
+        output_dir = os.path.abspath(artifacts.output_dir)
+        target = config.simple_targets()[0] if config.simple_targets() else None
+        target_shape = target.shape if target else config.target_shape
+        target_material = target.material_name if target else config.target_name
+        target_center_x = target.center_x if target else config.target_center_x
+        target_center_y = target.center_y if target else config.target_center_y
+        target_radius = target.radius if target else config.target_radius
+        target_depth_m = max(0.0, config.ground_surface_y - target_center_y)
+        samples, traces, dt = self._primary_bscan_shape(artifacts.primary_out_path)
+        if traces <= 0:
+            traces = max(1, config.n_traces)
+
+        target_trace_range = self._target_trace_range(
+            config, target_center_x, target_radius, traces
+        )
+        background_trace_range = self._background_trace_range(
+            target_trace_range, traces
+        )
+        target_sample_range = self._target_sample_range(
+            config, target_center_x, target_center_y, target_radius, samples, dt
+        )
+
+        text = "\n".join(
+            [
+                "schema: gprmax_ground_truth_v1",
+                "dataset_id: {0}".format(config.output_name),
+                "model_file: {0}".format(
+                    self._relative_to_output_dir(output_dir, artifacts.input_path)
+                ),
+                "output_file: {0}".format(
+                    self._relative_to_output_dir(
+                        output_dir, artifacts.primary_out_path
+                    )
+                ),
+                "target_roi:",
+                "  trace_range: [{0}, {1}]".format(
+                    target_trace_range[0], target_trace_range[1]
+                ),
+                "  sample_range: [{0}, {1}]".format(
+                    target_sample_range[0], target_sample_range[1]
+                ),
+                "background_roi:",
+                "  trace_range: [{0}, {1}]".format(
+                    background_trace_range[0], background_trace_range[1]
+                ),
+                "  sample_range: [{0}, {1}]".format(
+                    target_sample_range[0], target_sample_range[1]
+                ),
+                "target:",
+                "  type: {0}".format(self._ground_truth_target_type(target_shape)),
+                "  depth_m: {0:.6f}".format(target_depth_m),
+                "  material: {0}".format(target_material),
+                "  center_x_m: {0:.6f}".format(target_center_x),
+                "  center_y_m: {0:.6f}".format(target_center_y),
+                "  radius_m: {0:.6f}".format(target_radius),
+                "metrics:",
+                "  cnr_db: null",
+                "  background_energy: null",
+                "  target_energy: null",
+                "  localization_error_trace: null",
+                "  localization_error_sample: null",
+                "",
+            ]
+        )
+        with open(artifacts.ground_truth_path, "w", encoding="utf-8") as fobj:
+            fobj.write(text)
+
+    def _primary_bscan_shape(self, primary_out_path: str) -> Tuple[int, int, float]:
+        if not primary_out_path or not os.path.exists(primary_out_path):
+            return 0, 0, 0.0
+        try:
+            with h5py.File(primary_out_path, "r") as fobj:
+                data = fobj["/rxs/rx1/Ez"]
+                if len(data.shape) == 1:
+                    samples = int(data.shape[0])
+                    traces = 1
+                else:
+                    samples = int(data.shape[0])
+                    traces = int(data.shape[1])
+                dt = float(fobj.attrs.get("dt", 0.0))
+                return samples, traces, dt
+        except Exception:
+            return 0, 0, 0.0
+
+    def _target_trace_range(
+        self,
+        config: SimulationConfig,
+        target_center_x: float,
+        target_radius: float,
+        traces: int,
+    ) -> List[int]:
+        scan_start_mid_x = config.source_start_x + 0.5 * config.receiver_offset
+        step = config.effective_scan_step if config.effective_scan_step > 0 else config.dx
+        center = int(round((target_center_x - scan_start_mid_x) / step))
+        half_width = max(2, int(math.ceil(max(target_radius, step) / step)) + 2)
+        return self._clip_index_range(center, half_width, traces)
+
+    def _background_trace_range(
+        self, target_trace_range: List[int], traces: int
+    ) -> List[int]:
+        width = max(1, target_trace_range[1] - target_trace_range[0] + 1)
+        if traces <= width:
+            return [0, max(0, traces - 1)]
+        target_center = 0.5 * (target_trace_range[0] + target_trace_range[1])
+        if target_center < 0.5 * traces:
+            start = traces - width
+            return [start, traces - 1]
+        return [0, width - 1]
+
+    def _target_sample_range(
+        self,
+        config: SimulationConfig,
+        target_center_x: float,
+        target_center_y: float,
+        target_radius: float,
+        samples: int,
+        dt: float,
+    ) -> List[int]:
+        if samples <= 0:
+            return [0, 0]
+        if dt <= 0:
+            center = samples // 2
+        else:
+            center_trace = self._target_trace_range(
+                config, target_center_x, target_radius, max(1, config.n_traces)
+            )
+            trace_index = int(round(0.5 * (center_trace[0] + center_trace[1])))
+            source_x = config.source_start_x + trace_index * config.effective_scan_step
+            receiver_x = source_x + config.receiver_offset
+            velocity = material_velocity(config.host_eps_r)
+            travel_distance = math.hypot(
+                source_x - target_center_x, config.source_y - target_center_y
+            ) + math.hypot(
+                receiver_x - target_center_x, config.receiver_y - target_center_y
+            )
+            center = int(round((travel_distance / velocity) / dt))
+        half_width = max(8, int(round(samples * 0.03)))
+        return self._clip_index_range(center, half_width, samples)
+
+    def _clip_index_range(
+        self, center: int, half_width: int, count: int
+    ) -> List[int]:
+        if count <= 0:
+            return [0, 0]
+        start = max(0, center - half_width)
+        end = min(count - 1, center + half_width)
+        return [int(start), int(end)]
+
+    def _ground_truth_target_type(self, target_shape: str) -> str:
+        if target_shape == "cylinder":
+            return "pipe"
+        return target_shape
 
     def _relative_to_output_dir(self, output_dir: str, path: str) -> str:
         if not path:

@@ -20,9 +20,11 @@ import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
 
 import h5py
 import numpy as np
+import yaml
 
 from gprmax_gui_pyside6 import BuildArtifacts
 from gprmax_gui_pyside6 import GprMaxRunner
@@ -60,6 +62,7 @@ class TestUavGprHandoffContract(unittest.TestCase):
             input_path = os.path.join(tmpdir, "handoff.in")
             preview_path = os.path.join(tmpdir, "handoff_preview.png")
             metadata_path = os.path.join(tmpdir, "handoff_metadata.json")
+            ground_truth_path = os.path.join(tmpdir, "ground_truth.yaml")
             bscan_path = os.path.join(tmpdir, "handoff_bscan.png")
             self.write_merged_output(merged_path)
             for path in (input_path, preview_path, metadata_path, bscan_path):
@@ -80,6 +83,7 @@ class TestUavGprHandoffContract(unittest.TestCase):
                 preview_path=preview_path,
                 metadata_path=metadata_path,
                 manifest_path=manifest_path,
+                ground_truth_path=ground_truth_path,
                 primary_out_path=merged_path,
                 merged_out_path=merged_path,
                 bscan_png_path=bscan_path,
@@ -119,7 +123,12 @@ class TestUavGprHandoffContract(unittest.TestCase):
             self.assertTrue(readiness["primary_out_file"])
             self.assertTrue(readiness["merged_out_file"])
             self.assertTrue(readiness["metadata_file"])
+            self.assertTrue(readiness["ground_truth_file"])
             self.assertTrue(readiness["bscan_preview_file"])
+            self.assertEqual(
+                manifest["paths_relative_to_output_dir"]["ground_truth_file"],
+                "ground_truth.yaml",
+            )
             self.assertEqual(
                 manifest["gprmax_notes"]["preferred_bscan_dataset"], "/rxs/rx1/Ez"
             )
@@ -138,6 +147,35 @@ class TestUavGprHandoffContract(unittest.TestCase):
             self.assertEqual(
                 summary["receivers"]["rx1"]["datasets"]["Positions"], [2, 3]
             )
+
+            with open(ground_truth_path, "r", encoding="utf-8") as fobj:
+                ground_truth = yaml.safe_load(fobj)
+
+            schema = json.loads(
+                Path("docs/schemas/gprmax_ground_truth.schema.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            try:
+                import jsonschema
+            except Exception:
+                jsonschema = None
+            if jsonschema is not None:
+                jsonschema.validate(ground_truth, schema)
+
+            self.assertEqual(ground_truth["schema"], "gprmax_ground_truth_v1")
+            self.assertEqual(ground_truth["dataset_id"], "handoff")
+            self.assertEqual(ground_truth["model_file"], "handoff.in")
+            self.assertEqual(ground_truth["output_file"], "handoff_merged.out")
+            self.assertEqual(ground_truth["target"]["type"], "pipe")
+            self.assertEqual(ground_truth["target"]["material"], "pec")
+            self.assertAlmostEqual(ground_truth["target"]["depth_m"], 0.09)
+            self.assertIn("trace_range", ground_truth["target_roi"])
+            self.assertIn("sample_range", ground_truth["target_roi"])
+            self.assertIn("trace_range", ground_truth["background_roi"])
+            self.assertIn("sample_range", ground_truth["background_roi"])
+            self.assertIn("cnr_db", ground_truth["metrics"])
+            self.assertIsNone(ground_truth["metrics"]["cnr_db"])
 
 
 if __name__ == "__main__":
